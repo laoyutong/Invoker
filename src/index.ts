@@ -1,13 +1,13 @@
-import { streamText, ModelMessage } from "ai";
 import * as readline from "node:readline";
+import { type ModelMessage, streamText } from "ai";
 
 import "./model";
-import { model } from "./model";
-import { SYSTEM_PROMPT } from "./prompt";
-import { toolRegistry, tools } from "./tools";
 import { MAX_TOOL_LOOPS } from "./constants";
 import { CycleDetector } from "./cycle-detector";
+import { model } from "./model";
+import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
+import { toolRegistry, tools } from "./tools";
 
 const messages: ModelMessage[] = [];
 const cycleDetector = new CycleDetector();
@@ -30,7 +30,7 @@ function logToolCall(name: string, input: unknown) {
   console.log(`   └─ 入参: ${JSON.stringify(input)}`);
 }
 
-function logToolResult(name: string, output: unknown) {
+function logToolResult(_name: string, output: unknown) {
   console.log(`   └─ 结果: ${JSON.stringify(output)}`);
 }
 
@@ -57,7 +57,10 @@ async function main() {
       while (keepCalling) {
         if (loopCount >= MAX_TOOL_LOOPS) {
           console.log(`\n⚠️ 工具调用已达上限 ${MAX_TOOL_LOOPS} 次，强制终止`);
-          messages.push({ role: "assistant", content: "工具调用次数过多，已终止。" } as ModelMessage);
+          messages.push({
+            role: "assistant",
+            content: "工具调用次数过多，已终止。",
+          } as ModelMessage);
           break;
         }
         loopCount++;
@@ -120,7 +123,11 @@ async function main() {
           const lastInputMsg = messages[messages.length - 1];
 
           // 推送 assistant 消息
-          const contentParts: any[] = [];
+          const contentParts: Array<
+            | { type: "reasoning"; text: string }
+            | { type: "text"; text: string }
+            | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
+          > = [];
           if (reasoningText) contentParts.push({ type: "reasoning", text: reasoningText });
           if (fullText) contentParts.push({ type: "text", text: fullText });
           for (const tc of toolCalls) {

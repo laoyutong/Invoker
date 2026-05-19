@@ -1,5 +1,5 @@
-import { config } from "dotenv";
 import { createDeepSeek } from "@ai-sdk/deepseek";
+import { config } from "dotenv";
 
 config({ quiet: true });
 

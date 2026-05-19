@@ -1,4 +1,4 @@
-import { tool, jsonSchema } from "ai";
+import { jsonSchema, tool } from "ai";
 
 const MOCK_WEATHER: Record<string, { temp: number; condition: string; humidity: number }> = {
   北京: { temp: 25, condition: "晴", humidity: 40 },

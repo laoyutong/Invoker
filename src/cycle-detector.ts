@@ -56,9 +56,7 @@ export class CycleDetector {
     toolCalls: Array<{ toolName: string; input: unknown }>,
   ): CycleResult {
     const inputFingerprint = shortHash(normalizeMessage(lastInputMsg));
-    const outputFingerprint = shortHash(
-      toolCalls.map((tc) => ({ n: tc.toolName, i: tc.input })),
-    );
+    const outputFingerprint = shortHash(toolCalls.map((tc) => ({ n: tc.toolName, i: tc.input })));
     const cycleKey = `${inputFingerprint}|${outputFingerprint}`;
 
     this.window.push(cycleKey);

@@ -1,4 +1,4 @@
-import { tool, jsonSchema } from "ai";
+import { jsonSchema, tool } from "ai";
 
 /**
  * 陷阱工具：用于验证循环检测机制。

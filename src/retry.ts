@@ -18,7 +18,7 @@ export function isRetryable(error: unknown): boolean {
   // HTTP 状态码判断（message 中包含状态码的场景）
   const statusMatch = message.match(/(\d{3})/);
   if (statusMatch) {
-    const status = parseInt(statusMatch[1]);
+    const status = parseInt(statusMatch[1], 10);
     if ([429, 529, 408].includes(status)) return true;
     if (status >= 500 && status < 600) return true;
     if (status >= 400 && status < 500) return false;
@@ -51,23 +51,15 @@ export interface RetryOptions {
  * - 遇到不可重试错误时，立即抛出
  * - 重试次数耗尽后，抛出原始错误
  */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {},
-): Promise<T> {
-  const {
-    maxRetries = 5,
-    initialDelay = 1000,
-    backoffFactor = 2,
-    maxDelay = 30000,
-  } = options;
+export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
+  const { maxRetries = 5, initialDelay = 1000, backoffFactor = 2, maxDelay = 30000 } = options;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fn();
     } catch (error) {
       if (!isRetryable(error)) throw error;
-      const delay = Math.min(initialDelay * Math.pow(backoffFactor, attempt), maxDelay);
+      const delay = Math.min(initialDelay * backoffFactor ** attempt, maxDelay);
       // 给延迟加上 ±20% 的随机抖动，避免惊群
       const jitter = delay * 0.2 * (Math.random() * 2 - 1);
       const finalDelay = Math.round(delay + jitter);
