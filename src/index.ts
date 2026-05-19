@@ -4,10 +4,12 @@ import * as readline from "node:readline";
 import "./model";
 import { model } from "./model";
 import { SYSTEM_PROMPT } from "./prompt";
-import { weatherTool, executeWeather } from "./tools/weather";
+import { toolRegistry, tools } from "./tools";
 import { MAX_TOOL_LOOPS } from "./constants";
+import { CycleDetector } from "./cycle-detector";
 
 const messages: ModelMessage[] = [];
+const cycleDetector = new CycleDetector();
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -31,8 +33,6 @@ function logToolResult(name: string, output: unknown) {
   console.log(`   └─ 结果: ${JSON.stringify(output)}`);
 }
 
-type ToolCall = { toolCallId: string; toolName: string; input: unknown };
-
 async function main() {
   console.log('输入对话内容，输入 "exit" 退出\n');
 
@@ -48,9 +48,10 @@ async function main() {
 
     messages.push({ role: "user", content: input });
 
-    // 手动工具调用循环 — 每次 streamText 调用只走一步
     let loopCount = 0;
     let keepCalling = true;
+    cycleDetector.reset();
+
     while (keepCalling) {
       if (loopCount >= MAX_TOOL_LOOPS) {
         console.log(`\n⚠️ 工具调用已达上限 ${MAX_TOOL_LOOPS} 次，强制终止`);
@@ -58,16 +59,17 @@ async function main() {
         break;
       }
       loopCount++;
+
       const { fullStream } = streamText({
         model,
         system: SYSTEM_PROMPT,
         messages,
-        tools: { weather: weatherTool },
+        tools,
       });
 
       let fullText = "";
       let reasoningText = "";
-      const toolCalls: ToolCall[] = [];
+      const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
 
       for await (const part of fullStream) {
         switch (part.type) {
@@ -92,15 +94,16 @@ async function main() {
       }
 
       if (toolCalls.length === 0) {
-        // 没有工具调用 — 纯文本回复，本轮结束
         process.stdout.write("\n\n");
         messages.push({ role: "assistant", content: fullText });
         keepCalling = false;
       } else {
-        // 模型想要调用工具 — 手动执行
         console.log(`\n🔧 执行工具中...`);
 
-        // 推送 assistant 消息：reasoning + text + tool-call
+        // 保存循环检测所需的"输入"消息（assistant 看到的上一条消息）
+        const lastInputMsg = messages[messages.length - 1];
+
+        // 推送 assistant 消息
         const contentParts: any[] = [];
         if (reasoningText) contentParts.push({ type: "reasoning", text: reasoningText });
         if (fullText) contentParts.push({ type: "text", text: fullText });
@@ -111,24 +114,43 @@ async function main() {
 
         // 执行工具并推送结果
         for (const tc of toolCalls) {
-          if (tc.toolName === "weather") {
-            const result = executeWeather(tc.input as { city: string });
-            logToolResult(tc.toolName, result);
-            messages.push({
-              role: "tool",
-              content: [
-                {
-                  type: "tool-result" as const,
-                  toolCallId: tc.toolCallId,
-                  toolName: tc.toolName,
-                  output: { type: "json" as const, value: result },
-                },
-              ],
-            } as ModelMessage);
-          }
+          const entry = toolRegistry[tc.toolName];
+          if (!entry) continue;
+
+          const result = entry.execute(tc.input);
+          logToolResult(tc.toolName, result);
+          messages.push({
+            role: "tool",
+            content: [
+              {
+                type: "tool-result" as const,
+                toolCallId: tc.toolCallId,
+                toolName: tc.toolName,
+                output: { type: "json" as const, value: result },
+              },
+            ],
+          } as ModelMessage);
         }
 
-        // 继续循环 — 下一次 streamText 调用会携带工具结果
+        // 哈希循环检测（统一在工具执行后处理）
+        const cycleResult = cycleDetector.check(lastInputMsg, toolCalls);
+
+        if (cycleResult.consoleMessage) {
+          console.log(cycleResult.consoleMessage);
+        }
+
+        if (cycleResult.shouldBlock) {
+          messages.push({
+            role: "user",
+            content: cycleResult.injectMessage,
+          } as ModelMessage);
+          keepCalling = false;
+        } else if (cycleResult.shouldWarn) {
+          messages.push({
+            role: "user",
+            content: cycleResult.injectMessage,
+          } as ModelMessage);
+        }
       }
     }
   }
