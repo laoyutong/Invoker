@@ -1,8 +1,8 @@
 import * as readline from "node:readline";
-import { type ModelMessage, streamText } from "ai";
+import { type LanguageModelUsage, type ModelMessage, streamText } from "ai";
 
 import "./model";
-import { MAX_TOOL_LOOPS } from "./constants";
+import { MAX_TOOL_LOOPS, TOKEN_BUDGET } from "./constants";
 import { CycleDetector } from "./cycle-detector";
 import { model } from "./model";
 import { SYSTEM_PROMPT } from "./prompt";
@@ -34,8 +34,46 @@ function logToolResult(_name: string, output: unknown) {
   console.log(`   └─ 结果: ${JSON.stringify(output)}`);
 }
 
+function fmtTokens(n: number | undefined): string {
+  if (n === undefined) return "?";
+  return n.toLocaleString();
+}
+
+function logStepUsage(usage: LanguageModelUsage) {
+  const detail = [];
+  if (usage.inputTokens) {
+    let inputStr = `入 ${fmtTokens(usage.inputTokens)}`;
+    if (usage.inputTokenDetails?.cacheReadTokens) {
+      inputStr += ` (缓存命中 ${fmtTokens(usage.inputTokenDetails.cacheReadTokens)})`;
+    }
+    detail.push(inputStr);
+  }
+  if (usage.outputTokens) {
+    let outputStr = `出 ${fmtTokens(usage.outputTokens)}`;
+    if (usage.outputTokenDetails?.reasoningTokens) {
+      outputStr += ` (其中推理 ${fmtTokens(usage.outputTokenDetails.reasoningTokens)})`;
+    }
+    detail.push(outputStr);
+  }
+  const total = fmtTokens(usage.totalTokens);
+  console.log(`\n\n⚡ Token: ${detail.join(" | ")} | 合计 ${total}`);
+}
+
+function logCumulativeUsage(
+  cumulative: { inputTokens: number; outputTokens: number },
+  budget: number,
+) {
+  const total = cumulative.inputTokens + cumulative.outputTokens;
+  const pct = ((total / budget) * 100).toFixed(1);
+  console.log(
+    `\n📊 累计 Token: ${fmtTokens(total)} / ${fmtTokens(budget)} (${pct}%) | 入 ${fmtTokens(cumulative.inputTokens)} | 出 ${fmtTokens(cumulative.outputTokens)}`,
+  );
+}
+
 async function main() {
   console.log('输入对话内容，输入 "exit" 退出\n');
+
+  const cumulative = { inputTokens: 0, outputTokens: 0 };
 
   while (true) {
     const input = await ask();
@@ -65,7 +103,7 @@ async function main() {
         }
         loopCount++;
 
-        const { fullText, reasoningText, toolCalls } = await withRetry(async () => {
+        const { fullText, reasoningText, toolCalls, streamUsage } = await withRetry(async () => {
           const { fullStream } = streamText({
             model,
             system: SYSTEM_PROMPT,
@@ -78,6 +116,7 @@ async function main() {
           let fullText = "";
           let reasoningText = "";
           let streamError: unknown = null;
+          let streamUsage: LanguageModelUsage | null = null;
           const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
 
           for await (const part of fullStream) {
@@ -103,14 +142,50 @@ async function main() {
                   input: part.input,
                 });
                 break;
+
+              case "finish-step":
+                streamUsage = part.usage;
+                break;
+
+              case "finish":
+                // finish.totalUsage 是单步调用的汇总，优先使用
+                streamUsage = part.totalUsage;
+                break;
             }
           }
 
           // 流式错误不会自动抛出，需要手动检测后抛给 withRetry 处理
           if (streamError) throw streamError;
 
-          return { fullText, reasoningText, toolCalls };
+          return { fullText, reasoningText, toolCalls, streamUsage };
         });
+
+        // 累计 token 用量
+        if (streamUsage) {
+          logStepUsage(streamUsage);
+          cumulative.inputTokens += streamUsage.inputTokens ?? 0;
+          cumulative.outputTokens += streamUsage.outputTokens ?? 0;
+        }
+
+        // 预算追踪：有额度时每步展示累计用量
+        if (TOKEN_BUDGET.maxTokens > 0 && cumulative.inputTokens + cumulative.outputTokens > 0) {
+          logCumulativeUsage(cumulative, TOKEN_BUDGET.maxTokens);
+        }
+
+        // 预算耗尽：终止本轮工具调用，会话可继续
+        if (
+          TOKEN_BUDGET.maxTokens > 0 &&
+          cumulative.inputTokens + cumulative.outputTokens >= TOKEN_BUDGET.maxTokens
+        ) {
+          console.log("🛑 本轮 Token 预算已耗尽\n");
+          process.stdout.write("\n\n");
+          messages.push({
+            role: "assistant",
+            content: fullText || "已达到 Token 预算上限。",
+          } as ModelMessage);
+          keepCalling = false;
+          continue;
+        }
 
         if (toolCalls.length === 0) {
           process.stdout.write("\n\n");

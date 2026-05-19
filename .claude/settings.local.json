@@ -13,7 +13,8 @@
       "Bash(pnpm exec:*)",
       "Bash(pnpm check:*)",
       "Bash(pnpm biome:*)",
-      "Bash(pnpm build:*)"
+      "Bash(pnpm build:*)",
+      "Bash(npx biome:*)"
     ]
   }
 }

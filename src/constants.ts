@@ -5,3 +5,8 @@ export const CYCLE_DETECTION = {
   warnRepeats: 3, // 同一模式重复 N 次时发出警告
   blockRepeats: 5, // 同一模式重复 N 次时阻断工具调用
 } as const;
+
+export const TOKEN_BUDGET = {
+  /** 会话最大 token 数，0 = 不限 */
+  maxTokens: 10000,
+} as const;
