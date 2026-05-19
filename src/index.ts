@@ -48,7 +48,7 @@ async function main() {
 
     messages.push({ role: "user", content: input });
 
-    // Manual tool-call loop — each streamText call is a single step
+    // 手动工具调用循环 — 每次 streamText 调用只走一步
     let loopCount = 0;
     let keepCalling = true;
     while (keepCalling) {
@@ -92,15 +92,15 @@ async function main() {
       }
 
       if (toolCalls.length === 0) {
-        // No tools called — just a text response, done with this turn
+        // 没有工具调用 — 纯文本回复，本轮结束
         process.stdout.write("\n\n");
         messages.push({ role: "assistant", content: fullText });
         keepCalling = false;
       } else {
-        // Model wants to call tools — execute manually
+        // 模型想要调用工具 — 手动执行
         console.log(`\n🔧 执行工具中...`);
 
-        // Push assistant message with reasoning + text + tool-calls
+        // 推送 assistant 消息：reasoning + text + tool-call
         const contentParts: any[] = [];
         if (reasoningText) contentParts.push({ type: "reasoning", text: reasoningText });
         if (fullText) contentParts.push({ type: "text", text: fullText });
@@ -109,7 +109,7 @@ async function main() {
         }
         messages.push({ role: "assistant", content: contentParts } as ModelMessage);
 
-        // Execute tools and push results
+        // 执行工具并推送结果
         for (const tc of toolCalls) {
           if (tc.toolName === "weather") {
             const result = executeWeather(tc.input as { city: string });
@@ -128,7 +128,7 @@ async function main() {
           }
         }
 
-        // Loop continues — next streamText call will include tool results
+        // 继续循环 — 下一次 streamText 调用会携带工具结果
       }
     }
   }
