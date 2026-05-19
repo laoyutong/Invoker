@@ -1,20 +1,11 @@
-import { config } from "dotenv";
-import { createOpenAI } from "@ai-sdk/openai";
 import { streamText, ModelMessage } from "ai";
 import * as readline from "node:readline";
 
-config({ quiet: true });
-
-const deepseek = createOpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-});
-
-const model = deepseek.chat("deepseek-v4-flash");
-
-const SYSTEM_PROMPT = `你是 Invoker，一个专注于软件开发的 AI 助手。
-你说话简洁直接，喜欢用代码示例来解释问题。
-如果用户的问题不够清晰，你会反问而不是瞎猜。`;
+import "./model";
+import { model } from "./model";
+import { SYSTEM_PROMPT } from "./prompt";
+import { weatherTool, executeWeather } from "./tools/weather";
+import { MAX_TOOL_LOOPS } from "./constants";
 
 const messages: ModelMessage[] = [];
 
@@ -31,6 +22,17 @@ function ask(): Promise<string> {
   });
 }
 
+function logToolCall(name: string, input: unknown) {
+  console.log(`\n📦 模型调用工具: ${name}`);
+  console.log(`   └─ 入参: ${JSON.stringify(input)}`);
+}
+
+function logToolResult(name: string, output: unknown) {
+  console.log(`   └─ 结果: ${JSON.stringify(output)}`);
+}
+
+type ToolCall = { toolCallId: string; toolName: string; input: unknown };
+
 async function main() {
   console.log('输入对话内容，输入 "exit" 退出\n');
 
@@ -46,20 +48,89 @@ async function main() {
 
     messages.push({ role: "user", content: input });
 
-    const { textStream } = streamText({
-      model,
-      system: SYSTEM_PROMPT,
-      messages,
-    });
+    // Manual tool-call loop — each streamText call is a single step
+    let loopCount = 0;
+    let keepCalling = true;
+    while (keepCalling) {
+      if (loopCount >= MAX_TOOL_LOOPS) {
+        console.log(`\n⚠️ 工具调用已达上限 ${MAX_TOOL_LOOPS} 次，强制终止`);
+        messages.push({ role: "assistant", content: "工具调用次数过多，已终止。" } as ModelMessage);
+        break;
+      }
+      loopCount++;
+      const { fullStream } = streamText({
+        model,
+        system: SYSTEM_PROMPT,
+        messages,
+        tools: { weather: weatherTool },
+      });
 
-    let fullResponse = "";
-    for await (const chunk of textStream) {
-      process.stdout.write(chunk);
-      fullResponse += chunk;
+      let fullText = "";
+      let reasoningText = "";
+      const toolCalls: ToolCall[] = [];
+
+      for await (const part of fullStream) {
+        switch (part.type) {
+          case "text-delta":
+            process.stdout.write(part.text);
+            fullText += part.text;
+            break;
+
+          case "reasoning-delta":
+            reasoningText += part.text;
+            break;
+
+          case "tool-call":
+            logToolCall(part.toolName, part.input);
+            toolCalls.push({
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              input: part.input,
+            });
+            break;
+        }
+      }
+
+      if (toolCalls.length === 0) {
+        // No tools called — just a text response, done with this turn
+        process.stdout.write("\n\n");
+        messages.push({ role: "assistant", content: fullText });
+        keepCalling = false;
+      } else {
+        // Model wants to call tools — execute manually
+        console.log(`\n🔧 执行工具中...`);
+
+        // Push assistant message with reasoning + text + tool-calls
+        const contentParts: any[] = [];
+        if (reasoningText) contentParts.push({ type: "reasoning", text: reasoningText });
+        if (fullText) contentParts.push({ type: "text", text: fullText });
+        for (const tc of toolCalls) {
+          contentParts.push({ type: "tool-call", ...tc });
+        }
+        messages.push({ role: "assistant", content: contentParts } as ModelMessage);
+
+        // Execute tools and push results
+        for (const tc of toolCalls) {
+          if (tc.toolName === "weather") {
+            const result = executeWeather(tc.input as { city: string });
+            logToolResult(tc.toolName, result);
+            messages.push({
+              role: "tool",
+              content: [
+                {
+                  type: "tool-result" as const,
+                  toolCallId: tc.toolCallId,
+                  toolName: tc.toolName,
+                  output: { type: "json" as const, value: result },
+                },
+              ],
+            } as ModelMessage);
+          }
+        }
+
+        // Loop continues — next streamText call will include tool results
+      }
     }
-    process.stdout.write("\n\n");
-
-    messages.push({ role: "assistant", content: fullResponse });
   }
 
   rl.close();
