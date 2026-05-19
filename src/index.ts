@@ -7,6 +7,7 @@ import { SYSTEM_PROMPT } from "./prompt";
 import { toolRegistry, tools } from "./tools";
 import { MAX_TOOL_LOOPS } from "./constants";
 import { CycleDetector } from "./cycle-detector";
+import { withRetry } from "./retry";
 
 const messages: ModelMessage[] = [];
 const cycleDetector = new CycleDetector();
@@ -60,38 +61,51 @@ async function main() {
       }
       loopCount++;
 
-      const { fullStream } = streamText({
-        model,
-        system: SYSTEM_PROMPT,
-        messages,
-        tools,
-      });
+      const { fullText, reasoningText, toolCalls } = await withRetry(async () => {
+        const { fullStream } = streamText({
+          model,
+          system: SYSTEM_PROMPT,
+          messages,
+          tools,
+          maxRetries: 0, // 禁用 SDK 内置重试，走自定义指数退避
+        });
 
-      let fullText = "";
-      let reasoningText = "";
-      const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
+        let fullText = "";
+        let reasoningText = "";
+        let streamError: unknown = null;
+        const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
 
-      for await (const part of fullStream) {
-        switch (part.type) {
-          case "text-delta":
-            process.stdout.write(part.text);
-            fullText += part.text;
-            break;
+        for await (const part of fullStream) {
+          switch (part.type) {
+            case "text-delta":
+              process.stdout.write(part.text);
+              fullText += part.text;
+              break;
 
-          case "reasoning-delta":
-            reasoningText += part.text;
-            break;
+            case "reasoning-delta":
+              reasoningText += part.text;
+              break;
 
-          case "tool-call":
-            logToolCall(part.toolName, part.input);
-            toolCalls.push({
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
-              input: part.input,
-            });
-            break;
+            case "error":
+              streamError = part.error;
+              break;
+
+            case "tool-call":
+              logToolCall(part.toolName, part.input);
+              toolCalls.push({
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                input: part.input,
+              });
+              break;
+          }
         }
-      }
+
+        // 流式错误不会自动抛出，需要手动检测后抛给 withRetry 处理
+        if (streamError) throw streamError;
+
+        return { fullText, reasoningText, toolCalls };
+      });
 
       if (toolCalls.length === 0) {
         process.stdout.write("\n\n");
