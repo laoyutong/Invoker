@@ -9,6 +9,13 @@ import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
 import { toolRegistry, tools } from "./tools";
 
+type ToolCallEntry = { toolCallId: string; toolName: string; input: unknown };
+
+type AssistantContentPart =
+  | { type: "reasoning"; text: string }
+  | { type: "text"; text: string }
+  | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown };
+
 const messages: ModelMessage[] = [];
 const cycleDetector = new CycleDetector();
 
@@ -60,13 +67,14 @@ function logStepUsage(usage: LanguageModelUsage) {
 }
 
 function logCumulativeUsage(
-  cumulative: { inputTokens: number; outputTokens: number },
+  used: number,
   budget: number,
+  inputTokens: number,
+  outputTokens: number,
 ) {
-  const total = cumulative.inputTokens + cumulative.outputTokens;
-  const pct = ((total / budget) * 100).toFixed(1);
+  const pct = ((used / budget) * 100).toFixed(1);
   console.log(
-    `\n📊 累计 Token: ${fmtTokens(total)} / ${fmtTokens(budget)} (${pct}%) | 入 ${fmtTokens(cumulative.inputTokens)} | 出 ${fmtTokens(cumulative.outputTokens)}`,
+    `\n📊 累计 Token: ${fmtTokens(used)} / ${fmtTokens(budget)} (${pct}%) | 入 ${fmtTokens(inputTokens)} | 出 ${fmtTokens(outputTokens)}`,
   );
 }
 
@@ -117,7 +125,7 @@ async function main() {
           let reasoningText = "";
           let streamError: unknown = null;
           let streamUsage: LanguageModelUsage | null = null;
-          const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
+          const toolCalls: ToolCallEntry[] = [];
 
           for await (const part of fullStream) {
             switch (part.type) {
@@ -160,31 +168,32 @@ async function main() {
           return { fullText, reasoningText, toolCalls, streamUsage };
         });
 
-        // 累计 token 用量
+        // 累计 token 用量 + 预算追踪
         if (streamUsage) {
           logStepUsage(streamUsage);
           cumulative.inputTokens += streamUsage.inputTokens ?? 0;
           cumulative.outputTokens += streamUsage.outputTokens ?? 0;
-        }
 
-        // 预算追踪：有额度时每步展示累计用量
-        if (TOKEN_BUDGET.maxTokens > 0 && cumulative.inputTokens + cumulative.outputTokens > 0) {
-          logCumulativeUsage(cumulative, TOKEN_BUDGET.maxTokens);
-        }
+          if (TOKEN_BUDGET.maxTokens > 0) {
+            const used = cumulative.inputTokens + cumulative.outputTokens;
+            logCumulativeUsage(
+              used,
+              TOKEN_BUDGET.maxTokens,
+              cumulative.inputTokens,
+              cumulative.outputTokens,
+            );
 
-        // 预算耗尽：终止本轮工具调用，会话可继续
-        if (
-          TOKEN_BUDGET.maxTokens > 0 &&
-          cumulative.inputTokens + cumulative.outputTokens >= TOKEN_BUDGET.maxTokens
-        ) {
-          console.log("🛑 本轮 Token 预算已耗尽\n");
-          process.stdout.write("\n\n");
-          messages.push({
-            role: "assistant",
-            content: fullText || "已达到 Token 预算上限。",
-          } as ModelMessage);
-          keepCalling = false;
-          continue;
+            if (used >= TOKEN_BUDGET.maxTokens) {
+              console.log("🛑 本轮 Token 预算已耗尽\n");
+              process.stdout.write("\n\n");
+              messages.push({
+                role: "assistant",
+                content: fullText || "已达到 Token 预算上限。",
+              } as ModelMessage);
+              keepCalling = false;
+              continue;
+            }
+          }
         }
 
         if (toolCalls.length === 0) {
@@ -198,11 +207,7 @@ async function main() {
           const lastInputMsg = messages[messages.length - 1];
 
           // 推送 assistant 消息
-          const contentParts: Array<
-            | { type: "reasoning"; text: string }
-            | { type: "text"; text: string }
-            | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
-          > = [];
+          const contentParts: AssistantContentPart[] = [];
           if (reasoningText) contentParts.push({ type: "reasoning", text: reasoningText });
           if (fullText) contentParts.push({ type: "text", text: fullText });
           for (const tc of toolCalls) {
