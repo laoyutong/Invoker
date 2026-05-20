@@ -3,12 +3,12 @@ import type { ModelMessage } from "ai";
 
 import { CYCLE_DETECTION } from "./constants";
 
-function shortHash(content: unknown): string {
+const shortHash = (content: unknown): string => {
   return createHash("sha256").update(JSON.stringify(content)).digest("base64url").slice(0, 16);
-}
+};
 
 /** 规范化消息内容，剔除 toolCallId 等易变字段 */
-function normalizeMessage(msg: ModelMessage): unknown {
+const normalizeMessage = (msg: ModelMessage): unknown => {
   if (msg.role === "user") {
     return { r: "u", c: msg.content };
   }
@@ -32,7 +32,7 @@ function normalizeMessage(msg: ModelMessage): unknown {
     return { r: "t", p: parts };
   }
   return msg;
-}
+};
 
 export interface CycleResult {
   repeatCount: number;

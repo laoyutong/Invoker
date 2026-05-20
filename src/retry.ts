@@ -1,6 +1,6 @@
 import { APICallError, RetryError } from "ai";
 
-export function isRetryable(error: unknown): boolean {
+export const isRetryable = (error: unknown): boolean => {
   // AI SDK 重试耗尽时抛出 RetryError，原始错误在 lastError 里
   if (RetryError.isInstance(error)) {
     return isRetryable(error.lastError);
@@ -32,7 +32,7 @@ export function isRetryable(error: unknown): boolean {
   if (message.includes("No output generated")) return true;
 
   return false;
-}
+};
 
 export interface RetryOptions {
   /** 最大重试次数（不含首次），默认 5 */
@@ -51,7 +51,10 @@ export interface RetryOptions {
  * - 遇到不可重试错误时，立即抛出
  * - 重试次数耗尽后，抛出原始错误
  */
-export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
+export const withRetry = async <T>(
+  fn: () => Promise<T>,
+  options: RetryOptions = {},
+): Promise<T> => {
   const { maxRetries = 5, initialDelay = 1000, backoffFactor = 2, maxDelay = 30000 } = options;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -72,4 +75,4 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions =
 
   // 最后一次尝试，不再捕获——无论成功或失败都直接返回/抛出
   return fn();
-}
+};
