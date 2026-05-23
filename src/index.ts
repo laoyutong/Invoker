@@ -9,11 +9,23 @@ import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
 import { TokenTracker } from "./token-tracker";
 import { type ToolDefinition, toolRegistry } from "./tools";
+import { bashConfig } from "./tools/bash";
+import { editFileConfig } from "./tools/edit-file";
 import { findFilesConfig } from "./tools/find-files";
+import { globConfig } from "./tools/glob";
+import { grepConfig } from "./tools/grep";
 import { readFileConfig } from "./tools/read-file";
 import { writeFileConfig } from "./tools/write-file";
 
-for (const cfg of [readFileConfig, writeFileConfig, findFilesConfig]) {
+for (const cfg of [
+  readFileConfig,
+  writeFileConfig,
+  findFilesConfig,
+  editFileConfig,
+  globConfig,
+  grepConfig,
+  bashConfig,
+]) {
   toolRegistry.register(cfg);
 }
 
@@ -224,7 +236,7 @@ const main = async () => {
 
           // 以不安全工具为边界切分 group
           const groups: { tc: ToolCallEntry; entry: ToolDefinition }[][] = [];
-          let current: typeof groups[0] = [];
+          let current: (typeof groups)[0] = [];
           for (const e of entries) {
             if (e.entry.isConcurrencySafe) {
               current.push(e);
@@ -258,9 +270,7 @@ const main = async () => {
               } as ModelMessage);
             } else {
               // 安全工具组：并行执行（Promise.all 保证结果顺序与调用顺序一致）
-              const results = await Promise.all(
-                group.map((e) => executeOne(e.tc, e.entry)),
-              );
+              const results = await Promise.all(group.map((e) => executeOne(e.tc, e.entry)));
               for (const { tc, rawResult, entry } of results) {
                 logToolResult(tc.toolName, rawResult, entry.maxResultChars);
               }

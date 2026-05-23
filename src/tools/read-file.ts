@@ -76,7 +76,8 @@ export const readFileConfig = {
     },
     required: ["filePath"],
   },
-  execute: (input: any) => executeReadFile(input as { filePath: string; offset?: number; limit?: number }),
+  execute: (input: any) =>
+    executeReadFile(input as { filePath: string; offset?: number; limit?: number }),
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 500,

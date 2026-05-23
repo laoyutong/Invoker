@@ -23,10 +23,7 @@ export const writeFileTool = tool({
   }),
 });
 
-export async function executeWriteFile(input: {
-  filePath: string;
-  content: string;
-}) {
+export async function executeWriteFile(input: { filePath: string; content: string }) {
   const resolved = path.resolve(WORKSPACE_ROOT, input.filePath);
 
   if (!resolved.startsWith(WORKSPACE_ROOT)) {

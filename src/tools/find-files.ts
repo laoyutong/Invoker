@@ -6,8 +6,7 @@ import type { ToolDefinition } from "./index";
 const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const findFilesTool = tool({
-  description:
-    "在指定目录下搜索匹配模式的文件或子目录，返回匹配项的路径列表",
+  description: "在指定目录下搜索匹配模式的文件或子目录，返回匹配项的路径列表",
   inputSchema: jsonSchema<{
     dirPath?: string;
     pattern?: string;
@@ -21,8 +20,7 @@ export const findFilesTool = tool({
       },
       pattern: {
         type: "string",
-        description:
-          "文件名匹配模式（大小写不敏感），支持通配符 *，如 *.ts、test*。不传则返回所有",
+        description: "文件名匹配模式（大小写不敏感），支持通配符 *，如 *.ts、test*。不传则返回所有",
       },
       type: {
         type: "string",
@@ -35,9 +33,7 @@ export const findFilesTool = tool({
 });
 
 function matchPattern(name: string, pattern: string): boolean {
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*");
+  const regexStr = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   const regex = new RegExp(`^${regexStr}$`, "i");
   return regex.test(name);
 }
@@ -93,19 +89,30 @@ export async function executeFindFiles(input: {
 export const findFilesConfig = {
   name: "find_files",
   description:
-    "在指定目录下搜索匹配模式的文件或子目录，返回匹配项的路径列表。" +
-    "支持通配符 *，大小写不敏感",
+    "在指定目录下搜索匹配模式的文件或子目录，返回匹配项的路径列表。" + "支持通配符 *，大小写不敏感",
   parameters: {
     type: "object",
     properties: {
-      dirPath: { type: "string", description: "搜索的起始目录（相对于工作目录），默认为工作目录根" },
-      pattern: { type: "string", description: "文件名匹配模式，支持通配符 *，如 *.ts、test*。不传则返回所有" },
-      type: { type: "string", enum: ["file", "directory", "all"], description: "只返回文件、只返回目录，还是都返回。默认为 all" },
+      dirPath: {
+        type: "string",
+        description: "搜索的起始目录（相对于工作目录），默认为工作目录根",
+      },
+      pattern: {
+        type: "string",
+        description: "文件名匹配模式，支持通配符 *，如 *.ts、test*。不传则返回所有",
+      },
+      type: {
+        type: "string",
+        enum: ["file", "directory", "all"],
+        description: "只返回文件、只返回目录，还是都返回。默认为 all",
+      },
     },
     required: [],
   },
   execute: (input: any) =>
-    executeFindFiles(input as { dirPath?: string; pattern?: string; type?: "file" | "directory" | "all" }),
+    executeFindFiles(
+      input as { dirPath?: string; pattern?: string; type?: "file" | "directory" | "all" },
+    ),
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 3000,
