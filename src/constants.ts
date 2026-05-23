@@ -8,5 +8,5 @@ export const CYCLE_DETECTION = {
 
 export const TOKEN_BUDGET = {
   /** 会话最大 token 数，0 = 不限 */
-  maxTokens: 10000,
+  maxTokens: 0, // 0 = 不限
 } as const;

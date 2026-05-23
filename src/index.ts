@@ -8,7 +8,14 @@ import { model } from "./model";
 import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
 import { TokenTracker } from "./token-tracker";
-import { toolRegistry, tools } from "./tools";
+import { type ToolDefinition, toolRegistry } from "./tools";
+import { findFilesConfig } from "./tools/find-files";
+import { readFileConfig } from "./tools/read-file";
+import { writeFileConfig } from "./tools/write-file";
+
+for (const cfg of [readFileConfig, writeFileConfig, findFilesConfig]) {
+  toolRegistry.register(cfg);
+}
 
 type ToolCallEntry = { toolCallId: string; toolName: string; input: unknown };
 
@@ -38,8 +45,35 @@ const logToolCall = (name: string, input: unknown) => {
   console.log(`   └─ 入参: ${JSON.stringify(input)}`);
 };
 
-const logToolResult = (_name: string, output: unknown) => {
-  console.log(`   └─ 结果: ${JSON.stringify(output)}`);
+const truncateResult = (
+  output: unknown,
+  maxChars: number,
+): { truncated: boolean; text: string; skipped: number } => {
+  const text = JSON.stringify(output);
+  if (text.length <= maxChars) {
+    return { truncated: false, text, skipped: 0 };
+  }
+
+  const headLen = Math.floor(maxChars * 0.6);
+  const tailLen = maxChars - headLen;
+  const head = text.slice(0, headLen);
+  const tail = text.slice(text.length - tailLen);
+  const skipped = text.length - maxChars;
+
+  return {
+    truncated: true,
+    text: `${head}…[省略 ${skipped} 字符]…${tail}`,
+    skipped,
+  };
+};
+
+const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
+  if (!maxChars) {
+    console.log(`   └─ 结果: ${JSON.stringify(output)}`);
+    return;
+  }
+  const { text } = truncateResult(output, maxChars);
+  console.log(`   └─ 结果: ${text}`);
 };
 
 const main = async () => {
@@ -80,7 +114,7 @@ const main = async () => {
             model,
             system: SYSTEM_PROMPT,
             messages,
-            tools,
+            tools: toolRegistry.toAISDKFormat(),
             maxRetries: 0, // 禁用 SDK 内置重试，走自定义指数退避
             onError: () => {}, // 屏蔽 SDK 默认的 console.error 输出
           });
@@ -168,23 +202,82 @@ const main = async () => {
           messages.push({ role: "assistant", content: contentParts } as ModelMessage);
 
           // 执行工具并推送结果
+          // 按 isConcurrencySafe 分组：不安全工具前后形成"栅栏"，安全工具相邻可并行
+          const entries: { tc: ToolCallEntry; entry: ToolDefinition }[] = [];
           for (const tc of toolCalls) {
-            const entry = toolRegistry[tc.toolName];
-            if (!entry) continue;
+            const entry = toolRegistry.lookup(tc.toolName);
+            if (entry) entries.push({ tc, entry });
+          }
 
-            const result = entry.execute(tc.input);
-            logToolResult(tc.toolName, result);
-            messages.push({
-              role: "tool",
-              content: [
-                {
-                  type: "tool-result" as const,
-                  toolCallId: tc.toolCallId,
-                  toolName: tc.toolName,
-                  output: { type: "json" as const, value: result },
-                },
-              ],
-            } as ModelMessage);
+          const executeOne = async (tc: ToolCallEntry, entry: ToolDefinition) => {
+            const rawResult = await entry.execute(tc.input);
+
+            let result: unknown = rawResult;
+            if (entry.maxResultChars) {
+              const { truncated, text, skipped } = truncateResult(rawResult, entry.maxResultChars);
+              if (truncated) {
+                result = { _truncated: true, _skipped: skipped, content: text };
+              }
+            }
+            return { tc, result, rawResult, entry };
+          };
+
+          // 以不安全工具为边界切分 group
+          const groups: { tc: ToolCallEntry; entry: ToolDefinition }[][] = [];
+          let current: typeof groups[0] = [];
+          for (const e of entries) {
+            if (e.entry.isConcurrencySafe) {
+              current.push(e);
+            } else {
+              if (current.length > 0) {
+                groups.push(current);
+                current = [];
+              }
+              groups.push([e]); // 不安全工具独占一组
+            }
+          }
+          if (current.length > 0) groups.push(current);
+
+          // 组间串行，组内安全工具并行
+          for (const group of groups) {
+            if (group.length === 1 && !group[0].entry.isConcurrencySafe) {
+              // 不安全工具：独占执行
+              const { tc, entry } = group[0];
+              const { result, rawResult } = await executeOne(tc, entry);
+              logToolResult(tc.toolName, rawResult, entry.maxResultChars);
+              messages.push({
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result" as const,
+                    toolCallId: tc.toolCallId,
+                    toolName: tc.toolName,
+                    output: { type: "json" as const, value: result },
+                  },
+                ],
+              } as ModelMessage);
+            } else {
+              // 安全工具组：并行执行（Promise.all 保证结果顺序与调用顺序一致）
+              const results = await Promise.all(
+                group.map((e) => executeOne(e.tc, e.entry)),
+              );
+              for (const { tc, rawResult, entry } of results) {
+                logToolResult(tc.toolName, rawResult, entry.maxResultChars);
+              }
+              for (const { tc, result } of results) {
+                messages.push({
+                  role: "tool",
+                  content: [
+                    {
+                      type: "tool-result" as const,
+                      toolCallId: tc.toolCallId,
+                      toolName: tc.toolName,
+                      output: { type: "json" as const, value: result },
+                    },
+                  ],
+                } as ModelMessage);
+              }
+            }
           }
 
           // 哈希循环检测（统一在工具执行后处理）
