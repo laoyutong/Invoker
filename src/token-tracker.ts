@@ -40,7 +40,7 @@ export class TokenTracker {
       const used = this.inputTokens + this.outputTokens;
       const pct = ((used / TOKEN_BUDGET.maxTokens) * 100).toFixed(1);
       console.log(
-        `\n📊 累计 Token: ${fmtTokens(used)} / ${fmtTokens(TOKEN_BUDGET.maxTokens)} (${pct}%) | 入 ${fmtTokens(this.inputTokens)} | 出 ${fmtTokens(this.outputTokens)}`,
+        `\n📊 累计 Token: ${fmtTokens(used)} / ${fmtTokens(TOKEN_BUDGET.maxTokens)} (${pct}%)`,
       );
     }
   }
