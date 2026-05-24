@@ -5,7 +5,7 @@
 ## 已支持功能
 
 - **流式对话** — REPL 交互，支持推理过程展示
-- **工具调用** — `read_file` / `write_file` / `edit_file` / `find_files` / `glob` / `grep` / `bash`
+- **工具调用** — `read_file` / `write_file` / `edit_file` / `find_files` / `fetch_url` / `glob` / `grep` / `bash`
 - **并发控制** — 安全工具组内并行，不安全工具栅栏隔离
 - **结果截断** — 超长结果 60/40 截断，终端日志友好
 - **循环检测** — 滑动窗口检测死循环，警告 / 阻断两级

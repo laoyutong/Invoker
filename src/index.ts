@@ -11,6 +11,7 @@ import { TokenTracker } from "./token-tracker";
 import { type ToolDefinition, toolRegistry } from "./tools";
 import { bashConfig } from "./tools/bash";
 import { editFileConfig } from "./tools/edit-file";
+import { fetchUrlConfig } from "./tools/fetch-url";
 import { findFilesConfig } from "./tools/find-files";
 import { globConfig } from "./tools/glob";
 import { grepConfig } from "./tools/grep";
@@ -22,6 +23,7 @@ for (const cfg of [
   writeFileConfig,
   findFilesConfig,
   editFileConfig,
+  fetchUrlConfig,
   globConfig,
   grepConfig,
   bashConfig,
