@@ -19,7 +19,9 @@
       "Bash(npm view:*)",
       "Bash(npm pack:*)",
       "WebSearch",
-      "Bash(pnpm format:*)"
+      "Bash(pnpm format:*)",
+      "Bash(npm search:*)",
+      "Bash(git reset:*)"
     ]
   }
 }
