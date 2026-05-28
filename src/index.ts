@@ -4,6 +4,7 @@ import { type LanguageModelUsage, type ModelMessage, streamText } from "ai";
 import "./model";
 import { MAX_TOOL_LOOPS } from "./constants";
 import { CycleDetector } from "./cycle-detector";
+import { initMCP } from "./mcp";
 import { model } from "./model";
 import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
@@ -91,6 +92,7 @@ const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
 };
 
 const main = async () => {
+  await initMCP();
   console.log('输入对话内容，输入 "exit" 退出\n');
 
   const tokenTracker = new TokenTracker();

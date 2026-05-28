@@ -15,7 +15,11 @@
       "Bash(pnpm biome:*)",
       "Bash(pnpm build:*)",
       "Bash(npx biome:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(npm view:*)",
+      "Bash(npm pack:*)",
+      "WebSearch",
+      "Bash(pnpm format:*)"
     ]
   }
 }
