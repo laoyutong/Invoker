@@ -113,5 +113,7 @@ export const fetchUrlConfig = {
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 8000,
+  shouldDefer: true,
+  searchHint: "抓取网页 获取URL 网络请求 fetch",
   schema: fetchUrlTool,
 } satisfies ToolDefinition & { schema: unknown };

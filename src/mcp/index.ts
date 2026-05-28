@@ -48,6 +48,8 @@ function registerMCPTool(
     isConcurrencySafe: false,
     isReadOnly: false,
     maxResultChars: MCP_MAX_RESULT_CHARS,
+    shouldDefer: true,
+    searchHint: `${mcpTool.name} ${mcpTool.description || ""}`,
     schema,
   } satisfies ToolDefinition & { schema: unknown };
 
@@ -70,7 +72,17 @@ async function connectServer(serverName: string, config: McpServerConfig): Promi
 
     for (const t of tools) {
       registerMCPTool(serverName, t, client);
-      console.log(`   📌 注册工具: ${formatToolName(serverName, t.name)}`);
+    }
+
+    if (tools.length <= 5) {
+      for (const t of tools) {
+        console.log(`   📌 ${formatToolName(serverName, t.name)}`);
+      }
+    } else {
+      for (let i = 0; i < 3; i++) {
+        console.log(`   📌 ${formatToolName(serverName, tools[i].name)}`);
+      }
+      console.log(`   ...等 ${tools.length - 3} 个`);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

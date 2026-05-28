@@ -116,5 +116,7 @@ export const findFilesConfig = {
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 3000,
+  shouldDefer: true,
+  searchHint: "查找文件 目录列表 列出文件",
   schema: findFilesTool,
 } satisfies ToolDefinition & { schema: unknown };

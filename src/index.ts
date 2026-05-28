@@ -17,6 +17,7 @@ import { findFilesConfig } from "./tools/find-files";
 import { globConfig } from "./tools/glob";
 import { grepConfig } from "./tools/grep";
 import { readFileConfig } from "./tools/read-file";
+import { activateByKeywords } from "./tools/search";
 import { writeFileConfig } from "./tools/write-file";
 
 for (const cfg of [
@@ -46,6 +47,90 @@ const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
 });
+
+const STOP_WORDS = new Set([
+  "的",
+  "了",
+  "在",
+  "是",
+  "我",
+  "有",
+  "和",
+  "就",
+  "不",
+  "人",
+  "都",
+  "一",
+  "一个",
+  "上",
+  "也",
+  "很",
+  "到",
+  "说",
+  "要",
+  "去",
+  "你",
+  "会",
+  "着",
+  "没有",
+  "看",
+  "好",
+  "自己",
+  "这",
+  "他",
+  "她",
+  "它",
+  "们",
+  "那",
+  "些",
+  "什么",
+  "怎么",
+  "如何",
+  "可以",
+  "能",
+  "请",
+  "帮",
+  "让",
+  "用",
+  "把",
+  "给",
+  "a",
+  "an",
+  "the",
+  "is",
+  "of",
+  "to",
+  "in",
+  "for",
+  "and",
+  "or",
+  "with",
+  "be",
+  "it",
+  "on",
+  "at",
+  "by",
+  "from",
+  "this",
+  "that",
+  "what",
+  "which",
+]);
+
+/**
+ * 从用户输入中提取关键词，用于匹配延迟加载的工具
+ */
+function extractKeywords(input: string): string[] {
+  // 从中文混合文本中提取有意义的 token：
+  // 1. 按标点/空格切分
+  const byDelimiter = input.split(/[\s,，。！？、；：""''（）()[\]{}<>《》.!?;:]+/);
+  // 2. 提取英文/数字连续序列（github、issue、PR 等）
+  const alphaNumeric = input.match(/[a-zA-Z0-9_]+/g) ?? [];
+  const tokens = [...byDelimiter, ...alphaNumeric]
+    .filter((t) => t.length >= 2)
+    .filter((t) => !STOP_WORDS.has(t.toLowerCase()));
+  return [...new Set(tokens)];
+}
 
 const ask = (): Promise<string> => {
   return new Promise((resolve) => {
@@ -108,6 +193,23 @@ const main = async () => {
     if (!input.trim()) continue;
 
     messages.push({ role: "user", content: input });
+
+    // 用用户输入的关键词激活匹配的延迟工具（单关键词匹配，非全部）
+    const keywords = extractKeywords(input);
+    const activatedSet = new Set<string>();
+    const activatedNames: string[] = [];
+    for (const kw of keywords) {
+      const matched = activateByKeywords([kw]);
+      for (const t of matched) {
+        if (!activatedSet.has(t.name)) {
+          activatedSet.add(t.name);
+          activatedNames.push(t.name);
+        }
+      }
+    }
+    if (activatedNames.length > 0) {
+      console.log(`🔓 激活延迟工具: ${activatedNames.join(", ")}`);
+    }
 
     let loopCount = 0;
     let keepCalling = true;
