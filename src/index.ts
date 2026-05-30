@@ -2,7 +2,8 @@ import * as readline from "node:readline";
 import { type LanguageModelUsage, type ModelMessage, streamText } from "ai";
 
 import "./model";
-import { MAX_TOOL_LOOPS } from "./constants";
+import { compressConversation } from "./compress";
+import { CONTEXT_CLEANUP, MAX_TOOL_LOOPS } from "./constants";
 import { CycleDetector } from "./cycle-detector";
 import { initMCP } from "./mcp";
 import { model } from "./model";
@@ -192,6 +193,71 @@ const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
   }
   const { text } = truncateResult(output, maxChars);
   console.log(`   └─ 结果: ${text}`);
+};
+
+/**
+ * 清理旧的只读（查询类）工具结果，保留最近 N 个不动。
+ * 被清理的结果替换为 [tool result cleared]，同时移除 assistant 消息中对应的 tool-call。
+ */
+const cleanOldReadOnlyToolResults = (messages: ModelMessage[]): void => {
+  const keepCount = CONTEXT_CLEANUP.keepRecentReadOnlyResults;
+
+  // Step 1: 从旧到新扫描所有只读工具结果，记录位置
+  const entries: Array<{ index: number; toolCallId: string; toolName: string }> = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== "tool") continue;
+    if (!Array.isArray(msg.content)) continue;
+
+    for (const part of msg.content) {
+      if (part.type === "tool-result" && "toolName" in part) {
+        const def = toolRegistry.lookup(part.toolName as string);
+        if (def?.isReadOnly) {
+          entries.push({
+            index: i,
+            toolCallId: part.toolCallId as string,
+            toolName: part.toolName as string,
+          });
+        }
+      }
+    }
+  }
+
+  // 未达到清理阈值，跳过
+  if (entries.length <= CONTEXT_CLEANUP.cleanupThreshold) return;
+
+  // Step 2: 标记需要清理的（保留最后 keepCount 个）
+  const toClear = entries.slice(0, entries.length - keepCount);
+  const clearedIds = new Set(toClear.map((e) => e.toolCallId));
+
+  // Step 3: 替换 tool 消息的结果内容
+  for (const { index, toolCallId, toolName } of toClear) {
+    const msg = messages[index];
+    if (!Array.isArray(msg.content)) continue;
+    msg.content = msg.content.map((part: any) => {
+      if (part.type === "tool-result" && part.toolCallId === toolCallId) {
+        return {
+          type: "tool-result",
+          toolCallId,
+          toolName,
+          output: { type: "json", value: "[tool result cleared]" },
+        };
+      }
+      return part;
+    });
+  }
+
+  // Step 4: 从 assistant 消息中移除已清理的 tool-call 部分
+  for (const msg of messages) {
+    if (msg.role !== "assistant") continue;
+    if (!Array.isArray(msg.content)) continue;
+    msg.content = (msg.content as any[]).filter((part: any) => {
+      if (part.type === "tool-call" && "toolCallId" in part) {
+        return !clearedIds.has(part.toolCallId as string);
+      }
+      return true;
+    });
+  }
 };
 
 const RECENT_COUNT = 6;
@@ -522,8 +588,15 @@ const main = async () => {
               content: cycleResult.injectMessage,
             } as ModelMessage);
           }
+
+          // 清理旧的查询类工具结果，节省上下文
+          cleanOldReadOnlyToolResults(messages);
         }
       }
+
+      // 工具结果清理后若上下文仍过长，调用 LLM 压缩早期对话
+      await compressConversation(messages);
+
       saveSession(messages);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
