@@ -8,6 +8,7 @@ import { initMCP } from "./mcp";
 import { model } from "./model";
 import { SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "./retry";
+import { getSessionId, initSession, loadSession, saveSession, sessionExists } from "./session";
 import { TokenTracker } from "./token-tracker";
 import { type ToolDefinition, toolRegistry } from "./tools";
 import { bashConfig } from "./tools/bash";
@@ -40,7 +41,24 @@ type AssistantContentPart =
   | { type: "text"; text: string }
   | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown };
 
-const messages: ModelMessage[] = [];
+const args = process.argv.slice(2);
+
+// 解析 --continue [id] / -c [id]
+let shouldContinue = false;
+let targetSessionId: string | undefined;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--continue" || args[i] === "-c") {
+    shouldContinue = true;
+    // 下一个参数如果不是 flag 就当作 session id
+    const next = args[i + 1];
+    if (next && !next.startsWith("-")) {
+      targetSessionId = next;
+      i++;
+    }
+  }
+}
+
+let messages: ModelMessage[] = [];
 const cycleDetector = new CycleDetector();
 
 const rl = readline.createInterface({
@@ -176,8 +194,71 @@ const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
   console.log(`   └─ 结果: ${text}`);
 };
 
+const RECENT_COUNT = 6;
+
+function renderContent(content: unknown, maxLen = 200): string {
+  if (typeof content === "string") return content.slice(0, maxLen);
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        switch (part.type) {
+          case "text":
+            return (part.text as string).slice(0, maxLen);
+          case "reasoning":
+            return `[思考] ${(part.text as string).slice(0, 100)}`;
+          case "tool-call":
+            return `[调用 ${part.toolName}]`;
+          case "tool-result":
+            return `[工具结果]`;
+          default:
+            return "";
+        }
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+  return String(content).slice(0, maxLen);
+}
+
+function renderRecentMessages(messages: ModelMessage[]): void {
+  const recent = messages.slice(-RECENT_COUNT);
+  if (recent.length === 0) return;
+
+  const label: Record<string, string> = {
+    user: "👤",
+    assistant: "🤖",
+    tool: "🔧",
+  };
+
+  console.log(`\n── 最近 ${recent.length} 条消息 ──`);
+  for (const msg of recent) {
+    const role = msg.role;
+    const prefix = label[role] ?? role;
+    const text = renderContent(msg.content);
+    if (text) {
+      console.log(`  ${prefix}  ${text}`);
+    }
+  }
+  console.log("──────────\n");
+}
+
 const main = async () => {
   await initMCP();
+
+  initSession({ continueSession: shouldContinue, targetId: targetSessionId });
+
+  if (shouldContinue) {
+    if (sessionExists()) {
+      messages = loadSession();
+      console.log(`📂 恢复 session ${getSessionId()}，${messages.length} 条历史消息`);
+      renderRecentMessages(messages);
+    } else {
+      console.log(`⚠️  未找到 session 文件，开始新会话 ${getSessionId()}`);
+    }
+  } else {
+    console.log(`📋 新会话 ${getSessionId()}`);
+  }
+
   console.log('输入对话内容，输入 "exit" 退出\n');
 
   const tokenTracker = new TokenTracker();
@@ -186,7 +267,7 @@ const main = async () => {
     const input = await ask();
 
     if (input.toLowerCase() === "exit") {
-      console.log("再见！");
+      console.log(`再见！Session: ${getSessionId()}`);
       break;
     }
 
@@ -417,6 +498,7 @@ const main = async () => {
           }
         }
       }
+      saveSession(messages);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`\n❌ ${message}`);
