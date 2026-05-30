@@ -3,7 +3,7 @@ import { type LanguageModelUsage, type ModelMessage, streamText } from "ai";
 
 import "./model";
 import { compressConversation } from "./compress";
-import { CONTEXT_CLEANUP, MAX_TOOL_LOOPS } from "./constants";
+import { CONTEXT_CLEANUP, CONTEXT_WINDOW, MAX_TOOL_LOOPS, TOOL_RESULT_BUDGET, TOOL_RESULT_TTL } from "./constants";
 import { CycleDetector } from "./cycle-detector";
 import { initMCP } from "./mcp";
 import { model } from "./model";
@@ -60,6 +60,8 @@ const parseArgs = (argv: string[]): { shouldContinue: boolean; targetSessionId?:
 const { shouldContinue, targetSessionId } = parseArgs(args);
 
 let messages: ModelMessage[] = [];
+/** 工具结果的时间戳记录，用于 TTL 修剪（toolCallId → 创建时间） */
+const toolResultTimestamps = new Map<string, number>();
 const cycleDetector = new CycleDetector();
 
 const rl = readline.createInterface({
@@ -193,6 +195,201 @@ const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
   }
   const { text } = truncateResult(output, maxChars);
   console.log(`   └─ 结果: ${text}`);
+};
+
+const ERROR_KEYWORDS = [
+  "error", "Error", "ERROR",
+  "fail", "Fail", "FAIL",
+  "failed", "Failed",
+  "failure", "Failure",
+  "not found", "Not found", "Not Found", "NOT FOUND",
+  "not exist", "Not exist", "does not exist",
+  "no such file", "No such file",
+  "异常", "错误", "失败", "不存在", "未找到",
+  "ENOENT", "EACCES", "EPERM", "ECONNREFUSED", "ETIMEDOUT",
+];
+
+const hasErrorKeyword = (text: string): boolean =>
+  ERROR_KEYWORDS.some((kw) => text.includes(kw));
+
+/**
+ * TTL 修剪：按时间清理只读工具结果。
+ * - 包含错误/失败关键词的结果跳过，不修剪
+ * - 软修剪（> 5 分钟）：保留头尾各 1500 字符，中间替换为 [soft pruned]
+ * - 硬清除（> 10 分钟）：整个结果替换为 [tool result expired: tool_name]，移除对应 tool-call
+ */
+const pruneExpiredToolResults = (messages: ModelMessage[]): void => {
+  const now = Date.now();
+  const hardClearedIds = new Set<string>();
+  let skippedErrors = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== "tool" || !Array.isArray(msg.content)) continue;
+
+    // 检查是否为只读工具
+    const firstPart = msg.content[0] as any;
+    if (firstPart?.type !== "tool-result" || !firstPart.toolName) continue;
+    const def = toolRegistry.lookup(firstPart.toolName as string);
+    if (!def?.isReadOnly) continue;
+
+    msg.content = msg.content.map((part: any) => {
+      if (part.type !== "tool-result" || !part.toolCallId) return part;
+
+      const timestamp = toolResultTimestamps.get(part.toolCallId as string);
+      if (timestamp === undefined) return part; // session 恢复的老结果，无时间戳，跳过
+
+      const age = now - timestamp;
+
+      // 检查是否包含错误/失败关键词，命中则跳过不修剪
+      const value = part.output?.value;
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      if (age >= TOOL_RESULT_TTL.softPruneMs && hasErrorKeyword(text)) {
+        skippedErrors++;
+        return part;
+      }
+
+      // 硬清除：整个结果替换为占位符
+      if (age >= TOOL_RESULT_TTL.hardClearMs) {
+        hardClearedIds.add(part.toolCallId as string);
+        return {
+          type: "tool-result",
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          output: {
+            type: "json",
+            value: `[tool result expired: ${part.toolName}]`,
+          },
+        };
+      }
+
+      // 软修剪：保留头尾，中间替换
+      if (age >= TOOL_RESULT_TTL.softPruneMs) {
+        // 已软修剪过的跳过（避免嵌套标记）
+        if (text.includes("[soft pruned]")) return part;
+
+        const headLen = TOOL_RESULT_TTL.softPruneHeadChars;
+        const tailLen = TOOL_RESULT_TTL.softPruneTailChars;
+
+        if (text.length > headLen + tailLen + 100) {
+          const head = text.slice(0, headLen);
+          const tail = text.slice(-tailLen);
+          const skipped = text.length - headLen - tailLen;
+          return {
+            ...part,
+            output: {
+              type: "json",
+              value: `${head}\n\n...[soft pruned: ${skipped} chars]...\n\n${tail}`,
+            },
+          };
+        }
+      }
+
+      return part;
+    });
+  }
+
+  // 移除硬清除结果对应的 assistant tool-call
+  if (hardClearedIds.size > 0) {
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+      msg.content = (msg.content as any[]).filter((part: any) => {
+        if (part.type === "tool-call" && "toolCallId" in part) {
+          return !hardClearedIds.has(part.toolCallId as string);
+        }
+        return true;
+      });
+    }
+    console.log(
+      `\n⏰ TTL 硬清除: ${hardClearedIds.size} 条工具结果已过期`,
+    );
+  }
+};
+
+/**
+ * 总量预算：所有工具结果的字符总和不能超过上下文窗口的 75%。
+ * 超限时从最老的 tool result 开始替换为占位符，同时移除对应的 assistant tool-call。
+ * 返回被清理的 toolCallId 集合，供上层知晓哪些工具结果被截断。
+ */
+const enforceToolResultBudget = (messages: ModelMessage[]): Set<string> => {
+  const maxTotalChars = Math.floor(
+    CONTEXT_WINDOW.maxTokens * 4 * TOOL_RESULT_BUDGET.maxTotalResultsRatio,
+  );
+
+  // 收集所有 tool 消息及其字符数
+  const entries: Array<{
+    index: number;
+    toolCallId: string;
+    toolName: string;
+    chars: number;
+  }> = [];
+  let totalChars = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== "tool" || !Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      if (part.type === "tool-result" && "toolCallId" in part) {
+        const chars = JSON.stringify(part).length;
+        entries.push({
+          index: i,
+          toolCallId: part.toolCallId as string,
+          toolName: (part as any).toolName as string,
+          chars,
+        });
+        totalChars += chars;
+      }
+    }
+  }
+
+  if (totalChars <= maxTotalChars) return new Set();
+
+  console.log(
+    `\n📏 工具结果总量 ${(totalChars / 1024).toFixed(0)}KB 超出窗口 75%（${(maxTotalChars / 1024).toFixed(0)}KB），从最老的结果开始清理`,
+  );
+
+  // 从最老到最新逐个清理，直到总量回归预算内
+  const clearedIds = new Set<string>();
+  let excess = totalChars - maxTotalChars;
+
+  for (const { index, toolCallId, toolName, chars } of entries) {
+    if (excess <= 0) break;
+
+    const msg = messages[index];
+    if (!Array.isArray(msg.content)) continue;
+
+    msg.content = msg.content.map((part: any) => {
+      if (part.type === "tool-result" && part.toolCallId === toolCallId) {
+        return {
+          type: "tool-result",
+          toolCallId,
+          toolName,
+          output: {
+            type: "json",
+            value: "[tool result truncated: context budget exceeded]",
+          },
+        };
+      }
+      return part;
+    });
+
+    clearedIds.add(toolCallId);
+    excess -= chars;
+  }
+
+  // 移除对应的 assistant tool-call
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    msg.content = (msg.content as any[]).filter((part: any) => {
+      if (part.type === "tool-call" && "toolCallId" in part) {
+        return !clearedIds.has(part.toolCallId as string);
+      }
+      return true;
+    });
+  }
+
+  console.log(`   ✅ 已清理 ${clearedIds.size} 条工具结果`);
+  return clearedIds;
 };
 
 /**
@@ -370,6 +567,29 @@ const main = async () => {
 
   const tokenTracker = new TokenTracker();
 
+  /** 推送消息到上下文，同时用 chars/4 粗估 token 增量 */
+  const pushMessage = (msg: ModelMessage): void => {
+    messages.push(msg);
+    const text =
+      typeof msg.content === "string"
+        ? msg.content
+        : JSON.stringify(msg.content);
+    tokenTracker.addEstimate(text.length);
+
+    // 记录工具结果时间戳，用于 TTL 修剪
+    if (msg.role === "tool" && Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (
+          part.type === "tool-result" &&
+          "toolCallId" in part &&
+          typeof (part as any).toolCallId === "string"
+        ) {
+          toolResultTimestamps.set((part as any).toolCallId as string, Date.now());
+        }
+      }
+    }
+  };
+
   while (true) {
     const input = await ask();
 
@@ -380,7 +600,7 @@ const main = async () => {
 
     if (!input.trim()) continue;
 
-    messages.push({ role: "user", content: input });
+    pushMessage({ role: "user", content: input });
 
     activateDeferredTools(input);
 
@@ -392,7 +612,7 @@ const main = async () => {
       while (keepCalling) {
         if (loopCount >= MAX_TOOL_LOOPS) {
           console.log(`\n⚠️ 工具调用已达上限 ${MAX_TOOL_LOOPS} 次，强制终止`);
-          messages.push({
+          pushMessage({
             role: "assistant",
             content: "工具调用次数过多，已终止。",
           } as ModelMessage);
@@ -464,7 +684,7 @@ const main = async () => {
           if (tokenTracker.isExhausted()) {
             console.log("🛑 本轮 Token 预算已耗尽\n");
             process.stdout.write("\n\n");
-            messages.push({
+            pushMessage({
               role: "assistant",
               content: fullText || "已达到 Token 预算上限。",
             } as ModelMessage);
@@ -475,7 +695,7 @@ const main = async () => {
 
         if (toolCalls.length === 0) {
           process.stdout.write("\n\n");
-          messages.push({ role: "assistant", content: fullText });
+          pushMessage({ role: "assistant", content: fullText });
           keepCalling = false;
         } else {
           console.log(`\n🔧 执行工具中...`);
@@ -490,7 +710,7 @@ const main = async () => {
           for (const tc of toolCalls) {
             contentParts.push({ type: "tool-call", ...tc });
           }
-          messages.push({ role: "assistant", content: contentParts } as ModelMessage);
+          pushMessage({ role: "assistant", content: contentParts } as ModelMessage);
 
           // 执行工具并推送结果
           // 按 isConcurrencySafe 分组：不安全工具前后形成"栅栏"，安全工具相邻可并行
@@ -503,9 +723,17 @@ const main = async () => {
           const executeOne = async (tc: ToolCallEntry, entry: ToolDefinition) => {
             const rawResult = await entry.execute(tc.input);
 
+            // 动态截断上限：单条结果 ≤ 上下文窗口 50%（取 tool 自身限制与动态上限的较小值）
+            const maxSingleChars = Math.floor(
+              CONTEXT_WINDOW.maxTokens * 4 * TOOL_RESULT_BUDGET.maxSingleResultRatio,
+            );
+            const effectiveMaxChars = entry.maxResultChars
+              ? Math.min(entry.maxResultChars, maxSingleChars)
+              : maxSingleChars;
+
             let result: unknown = rawResult;
-            if (entry.maxResultChars) {
-              const { truncated, text, skipped } = truncateResult(rawResult, entry.maxResultChars);
+            if (JSON.stringify(rawResult).length > effectiveMaxChars) {
+              const { truncated, text, skipped } = truncateResult(rawResult, effectiveMaxChars);
               if (truncated) {
                 result = { _truncated: true, _skipped: skipped, content: text };
               }
@@ -536,7 +764,7 @@ const main = async () => {
               const { tc, entry } = group[0];
               const { result, rawResult } = await executeOne(tc, entry);
               logToolResult(tc.toolName, rawResult, entry.maxResultChars);
-              messages.push({
+              pushMessage({
                 role: "tool",
                 content: [
                   {
@@ -554,7 +782,7 @@ const main = async () => {
                 logToolResult(tc.toolName, rawResult, entry.maxResultChars);
               }
               for (const { tc, result } of results) {
-                messages.push({
+                pushMessage({
                   role: "tool",
                   content: [
                     {
@@ -577,17 +805,23 @@ const main = async () => {
           }
 
           if (cycleResult.shouldBlock) {
-            messages.push({
+            pushMessage({
               role: "user",
               content: cycleResult.injectMessage,
             } as ModelMessage);
             keepCalling = false;
           } else if (cycleResult.shouldWarn) {
-            messages.push({
+            pushMessage({
               role: "user",
               content: cycleResult.injectMessage,
             } as ModelMessage);
           }
+
+          // 总量预算：所有工具结果不超过窗口 75%
+          enforceToolResultBudget(messages);
+
+          // TTL 修剪：时间过期的只读工具结果做软修剪 / 硬清除
+          pruneExpiredToolResults(messages);
 
           // 清理旧的查询类工具结果，节省上下文
           cleanOldReadOnlyToolResults(messages);
@@ -595,7 +829,7 @@ const main = async () => {
       }
 
       // 工具结果清理后若上下文仍过长，调用 LLM 压缩早期对话
-      await compressConversation(messages);
+      await compressConversation(messages, tokenTracker);
 
       saveSession(messages);
     } catch (err) {

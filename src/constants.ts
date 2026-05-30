@@ -13,6 +13,29 @@ export const CONTEXT_CLEANUP = {
   keepRecentReadOnlyResults: 3,
 } as const;
 
+export const CONTEXT_WINDOW = {
+  /** 模型上下文窗口 token 数（DeepSeek V4: 128K） */
+  maxTokens: 131072,
+} as const;
+
+export const TOOL_RESULT_BUDGET = {
+  /** 单个工具结果的字符数上限 = 上下文窗口 × 此比例 */
+  maxSingleResultRatio: 0.5,
+  /** 所有工具结果的总字符数上限 = 上下文窗口 × 此比例 */
+  maxTotalResultsRatio: 0.75,
+} as const;
+
+export const TOOL_RESULT_TTL = {
+  /** 软修剪：超过此时间（毫秒）的工具结果做 Head/Tail 保留 */
+  softPruneMs: 5 * 60 * 1000,
+  /** 软修剪保留的头部字符数 */
+  softPruneHeadChars: 1500,
+  /** 软修剪保留的尾部字符数 */
+  softPruneTailChars: 1500,
+  /** 硬清除：超过此时间（毫秒）的工具结果完全替换为占位符 */
+  hardClearMs: 10 * 60 * 1000,
+} as const;
+
 export const CONTEXT_COMPRESSION = {
   /** 总消息数超过此阈值时触发 LLM 压缩 */
   messageThreshold: 40,

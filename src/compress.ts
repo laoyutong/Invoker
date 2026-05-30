@@ -2,6 +2,7 @@ import { generateText, type ModelMessage } from "ai";
 
 import { CONTEXT_COMPRESSION } from "./constants";
 import { model } from "./model";
+import type { TokenTracker } from "./token-tracker";
 
 /**
  * 压缩提示词 —— 严格结构化模板
@@ -109,6 +110,7 @@ const formatMessages = (msgs: ModelMessage[]): string => {
  */
 export const compressConversation = async (
   messages: ModelMessage[],
+  tokenTracker?: TokenTracker,
 ): Promise<void> => {
   const { messageThreshold, keepRecent, minCompressCount } =
     CONTEXT_COMPRESSION;
@@ -152,6 +154,9 @@ export const compressConversation = async (
       role: "user",
       content: summary,
     } as ModelMessage);
+
+    // 替换后 net 变化用 chars/4 粗估（下次 API 调用会校准）
+    tokenTracker?.addEstimate(summary.length);
 
     console.log(
       `✅ 压缩完成：${toCompress.length} 条早期消息 → 1 条摘要（当前共 ${messages.length} 条消息）`,
