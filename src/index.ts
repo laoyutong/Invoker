@@ -6,7 +6,7 @@ import { MAX_TOOL_LOOPS } from "./constants";
 import { CycleDetector } from "./cycle-detector";
 import { initMCP } from "./mcp";
 import { model } from "./model";
-import { SYSTEM_PROMPT } from "./prompt";
+import { buildPrompt } from "./prompt";
 import { withRetry } from "./retry";
 import { getSessionId, initSession, loadSession, saveSession, sessionExists } from "./session";
 import { TokenTracker } from "./token-tracker";
@@ -43,20 +43,20 @@ type AssistantContentPart =
 
 const args = process.argv.slice(2);
 
-// 解析 --continue [id] / -c [id]
-let shouldContinue = false;
-let targetSessionId: string | undefined;
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--continue" || args[i] === "-c") {
-    shouldContinue = true;
-    // 下一个参数如果不是 flag 就当作 session id
-    const next = args[i + 1];
-    if (next && !next.startsWith("-")) {
-      targetSessionId = next;
-      i++;
+const parseArgs = (argv: string[]): { shouldContinue: boolean; targetSessionId?: string } => {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--continue" || argv[i] === "-c") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        return { shouldContinue: true, targetSessionId: next };
+      }
+      return { shouldContinue: true };
     }
   }
-}
+  return { shouldContinue: false };
+};
+
+const { shouldContinue, targetSessionId } = parseArgs(args);
 
 let messages: ModelMessage[] = [];
 const cycleDetector = new CycleDetector();
@@ -138,7 +138,7 @@ const STOP_WORDS = new Set([
 /**
  * 从用户输入中提取关键词，用于匹配延迟加载的工具
  */
-function extractKeywords(input: string): string[] {
+const extractKeywords = (input: string): string[] => {
   // 从中文混合文本中提取有意义的 token：
   // 1. 按标点/空格切分
   const byDelimiter = input.split(/[\s,，。！？、；：""''（）()[\]{}<>《》.!?;:]+/);
@@ -196,7 +196,7 @@ const logToolResult = (_name: string, output: unknown, maxChars?: number) => {
 
 const RECENT_COUNT = 6;
 
-function renderContent(content: unknown, maxLen = 200): string {
+const renderContent = (content: unknown, maxLen = 200): string => {
   if (typeof content === "string") return content.slice(0, maxLen);
   if (Array.isArray(content)) {
     return content
@@ -220,7 +220,7 @@ function renderContent(content: unknown, maxLen = 200): string {
   return String(content).slice(0, maxLen);
 }
 
-function renderRecentMessages(messages: ModelMessage[]): void {
+const renderRecentMessages = (messages: ModelMessage[]): void => {
   const recent = messages.slice(-RECENT_COUNT);
   if (recent.length === 0) return;
 
@@ -242,22 +242,63 @@ function renderRecentMessages(messages: ModelMessage[]): void {
   console.log("──────────\n");
 }
 
-const main = async () => {
-  await initMCP();
-
-  initSession({ continueSession: shouldContinue, targetId: targetSessionId });
-
+/** 初始化或恢复 session，加载历史消息 */
+const initOrRestoreSession = (): void => {
   if (shouldContinue) {
     if (sessionExists()) {
       messages = loadSession();
       console.log(`📂 恢复 session ${getSessionId()}，${messages.length} 条历史消息`);
       renderRecentMessages(messages);
-    } else {
-      console.log(`⚠️  未找到 session 文件，开始新会话 ${getSessionId()}`);
+      return;
     }
+    console.log(`⚠️  未找到 session 文件，开始新会话 ${getSessionId()}`);
   } else {
     console.log(`📋 新会话 ${getSessionId()}`);
   }
+}
+
+/** 组装当前运行时上下文并构建 system prompt */
+const buildSystemPrompt = (): string => {
+  const deferredNames = toolRegistry.deferredNames();
+  const deferredToolSummary = deferredNames
+    .map((name) => {
+      const t = toolRegistry.lookup(name);
+      const hint = t?.searchHint ? `（关键词: ${t.searchHint}）` : "";
+      return `- ${name}: ${t?.description ?? ""}${hint}`;
+    })
+    .join("\n");
+
+  return buildPrompt({
+    toolCount: toolRegistry.activeNames().length,
+    deferredToolSummary,
+    sessionMessageCount: messages.length,
+    sessionId: getSessionId(),
+  });
+}
+
+/** 用用户输入的关键词激活匹配的延迟工具 */
+const activateDeferredTools = (input: string): void => {
+  const keywords = extractKeywords(input);
+  const activatedSet = new Set<string>();
+  const activatedNames: string[] = [];
+  for (const kw of keywords) {
+    for (const t of activateByKeywords([kw])) {
+      if (!activatedSet.has(t.name)) {
+        activatedSet.add(t.name);
+        activatedNames.push(t.name);
+      }
+    }
+  }
+  if (activatedNames.length > 0) {
+    console.log(`🔓 激活延迟工具: ${activatedNames.join(", ")}`);
+  }
+}
+
+const main = async () => {
+  await initMCP();
+
+  initSession({ continueSession: shouldContinue, targetId: targetSessionId });
+  initOrRestoreSession();
 
   console.log('输入对话内容，输入 "exit" 退出\n');
 
@@ -275,22 +316,7 @@ const main = async () => {
 
     messages.push({ role: "user", content: input });
 
-    // 用用户输入的关键词激活匹配的延迟工具（单关键词匹配，非全部）
-    const keywords = extractKeywords(input);
-    const activatedSet = new Set<string>();
-    const activatedNames: string[] = [];
-    for (const kw of keywords) {
-      const matched = activateByKeywords([kw]);
-      for (const t of matched) {
-        if (!activatedSet.has(t.name)) {
-          activatedSet.add(t.name);
-          activatedNames.push(t.name);
-        }
-      }
-    }
-    if (activatedNames.length > 0) {
-      console.log(`🔓 激活延迟工具: ${activatedNames.join(", ")}`);
-    }
+    activateDeferredTools(input);
 
     let loopCount = 0;
     let keepCalling = true;
@@ -311,7 +337,7 @@ const main = async () => {
         const { fullText, reasoningText, toolCalls, streamUsage } = await withRetry(async () => {
           const { fullStream } = streamText({
             model,
-            system: SYSTEM_PROMPT,
+            system: buildSystemPrompt(),
             messages,
             tools: toolRegistry.toAISDKFormat(),
             maxRetries: 0, // 禁用 SDK 内置重试，走自定义指数退避
