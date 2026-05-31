@@ -14,8 +14,8 @@ export const CONTEXT_CLEANUP = {
 } as const;
 
 export const CONTEXT_WINDOW = {
-  /** 模型上下文窗口 token 数（DeepSeek V4: 128K） */
-  maxTokens: 131072,
+  /** 模型上下文窗口 token 数 */
+  maxTokens: 1_048_576, // 1M
 } as const;
 
 export const TOOL_RESULT_BUDGET = {
@@ -44,6 +44,24 @@ export const CONTEXT_COMPRESSION = {
   /** 最少需要压缩的消息条数，避免为少量消息调用 LLM */
   minCompressCount: 8,
 } as const;
+
+export interface PricingTier {
+  /** 每百万 token 价格（美元） */
+  input: number;       // 标准输入（非缓存命中）
+  cacheWrite: number;  // 缓存写入
+  cacheRead: number;   // 缓存读取
+  output: number;      // 输出 token
+}
+
+/** 各模型的每百万 token 定价（美元） */
+export const PRICING: Record<string, PricingTier> = {
+  "deepseek-v4-flash": {
+    input: 0.14,       // 标准输入
+    cacheWrite: 0.14,  // 缓存写入（DeepSeek 不加价）
+    cacheRead: 0.014,  // 缓存读取（10% 定价）
+    output: 1.10,      // 输出
+  },
+};
 
 export const TOKEN_BUDGET = {
   /** 会话最大 token 数，0 = 不限 */

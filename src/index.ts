@@ -6,7 +6,7 @@ import { compressConversation } from "./compress";
 import { CONTEXT_CLEANUP, CONTEXT_WINDOW, MAX_TOOL_LOOPS, TOOL_RESULT_BUDGET, TOOL_RESULT_TTL } from "./constants";
 import { CycleDetector } from "./cycle-detector";
 import { initMCP } from "./mcp";
-import { model } from "./model";
+import { MODEL_NAME, model } from "./model";
 import { buildPrompt } from "./prompt";
 import { withRetry } from "./retry";
 import { getSessionId, initSession, loadSession, saveSession, sessionExists } from "./session";
@@ -563,9 +563,9 @@ const main = async () => {
   initSession({ continueSession: shouldContinue, targetId: targetSessionId });
   initOrRestoreSession();
 
-  console.log('输入对话内容，输入 "exit" 退出\n');
+  console.log('输入对话内容，"exit" 退出，"/usage" 用量，"/context" 上下文\n');
 
-  const tokenTracker = new TokenTracker();
+  const tokenTracker = new TokenTracker(MODEL_NAME);
 
   /** 推送消息到上下文，同时用 chars/4 粗估 token 增量 */
   const pushMessage = (msg: ModelMessage): void => {
@@ -598,6 +598,16 @@ const main = async () => {
       break;
     }
 
+    if (input.trim() === "/usage") {
+      console.log(tokenTracker.summary());
+      continue;
+    }
+
+    if (input.trim() === "/context") {
+      console.log(tokenTracker.context());
+      continue;
+    }
+
     if (!input.trim()) continue;
 
     pushMessage({ role: "user", content: input });
@@ -621,11 +631,17 @@ const main = async () => {
         loopCount++;
 
         const { fullText, reasoningText, toolCalls, streamUsage } = await withRetry(async () => {
+          const systemPrompt = buildSystemPrompt();
+          const tools = toolRegistry.toAISDKFormat();
+
+          // 更新静态上下文，供 /context 命令展示（tracker 内部做 chars→token 粗估 + API 校准）
+          tokenTracker.updateStaticContext(systemPrompt.length, JSON.stringify(tools).length);
+
           const { fullStream } = streamText({
             model,
-            system: buildSystemPrompt(),
+            system: systemPrompt,
             messages,
-            tools: toolRegistry.toAISDKFormat(),
+            tools,
             maxRetries: 0, // 禁用 SDK 内置重试，走自定义指数退避
             onError: () => {}, // 屏蔽 SDK 默认的 console.error 输出
           });
