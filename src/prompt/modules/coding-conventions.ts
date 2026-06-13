@@ -3,8 +3,8 @@ import type { PromptModule } from "../types";
 /**
  * 编码约定 —— 静态，不依赖运行时上下文
  */
-export const codingConventions = (): PromptModule =>
-  () => `## 编码约定
+export const codingConventions = (): PromptModule => () =>
+  `## 编码约定
 - 代码自解释，不写冗余注释；只在逻辑不明显时加注释
 - 不过早抽象 —— 三个相似片段好过一次过早的提取
 - 不引入未来才需要的配置项或 feature flag

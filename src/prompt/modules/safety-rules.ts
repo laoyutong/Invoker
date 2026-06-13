@@ -3,8 +3,8 @@ import type { PromptModule } from "../types";
 /**
  * 安全约束 —— 静态，不依赖运行时上下文
  */
-export const safetyRules = (): PromptModule =>
-  () => `## 安全约束
+export const safetyRules = (): PromptModule => () =>
+  `## 安全约束
 - 不要执行破坏性 git 操作（reset --hard、push --force、branch -D）
 - 不要跳过 git hooks（--no-verify、--no-gpg-sign）
 - 不要修改 git config

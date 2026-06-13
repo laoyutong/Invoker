@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
-const WORKSPACE_ROOT = path.resolve(process.cwd());
+import { resolveWorkspacePath } from "../path-utils";
 
 export const readFileTool = tool({
   description: "读取指定路径的文件内容，返回文本内容",
@@ -30,14 +29,14 @@ export async function executeReadFile(input: {
   offset?: number;
   limit?: number;
 }) {
-  const resolved = path.resolve(WORKSPACE_ROOT, input.filePath);
+  const resolved = resolveWorkspacePath(input.filePath);
 
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许访问工作目录之外的文件: ${input.filePath}` };
+  if (!resolved.ok) {
+    return { error: `不允许访问工作目录之外的文件: ${resolved.error}` };
   }
 
   try {
-    const content = await fs.readFile(resolved, "utf-8");
+    const content = await fs.readFile(resolved.path, "utf-8");
     const lines = content.split("\n");
 
     const start = input.offset ? input.offset - 1 : 0;
@@ -76,10 +75,10 @@ export const readFileConfig = {
     },
     required: ["filePath"],
   },
-  execute: (input: any) =>
+  execute: (input: unknown) =>
     executeReadFile(input as { filePath: string; offset?: number; limit?: number }),
   isReadOnly: true,
   isConcurrencySafe: true,
-  maxResultChars: 500,
+  maxResultChars: 8000,
   schema: readFileTool,
 } satisfies ToolDefinition & { schema: unknown };

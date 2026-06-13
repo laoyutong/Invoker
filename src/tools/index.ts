@@ -4,7 +4,7 @@ export interface ToolDefinition {
   name: string;
   description: string; // 给模型看的描述
   parameters: Record<string, unknown>; // JSON Schema
-  execute: (input: any) => Promise<unknown>;
+  execute: (input: unknown) => Promise<unknown>;
 
   // 元数据——给 Agent Loop 做决策用
   isConcurrencySafe?: boolean; // 能否并行

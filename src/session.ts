@@ -47,7 +47,7 @@ const readIndex = (): SessionEntry[] => {
 
 const writeIndex = (entries: SessionEntry[]): void => {
   ensureDir(sessionDir());
-  fs.writeFileSync(indexPath(), JSON.stringify(entries) + "\n", "utf-8");
+  fs.writeFileSync(indexPath(), `${JSON.stringify(entries)}\n`, "utf-8");
 };
 
 const addToIndex = (id: string, created: string): void => {
@@ -70,6 +70,13 @@ let currentId: string | null = null;
 let currentCreated: string | null = null;
 
 export const getSessionId = (): string => currentId ?? "unknown";
+
+const requireSessionId = (): string => {
+  if (!currentId) {
+    throw new Error("Session 未初始化，请先调用 initSession()");
+  }
+  return currentId;
+};
 
 // ============ 公开 API ============
 
@@ -118,7 +125,7 @@ export const initSession = (opts: InitOptions): void => {
  * 加载当前 session 的消息历史
  */
 export const loadSession = (): ModelMessage[] => {
-  const filePath = messagesPath(currentId!);
+  const filePath = messagesPath(requireSessionId());
   if (!fs.existsSync(filePath)) return [];
 
   const content = fs.readFileSync(filePath, "utf-8").trim();
@@ -141,12 +148,13 @@ export const loadSession = (): ModelMessage[] => {
  * 覆写当前 session 的完整消息历史
  */
 export const saveSession = (messages: ModelMessage[]): void => {
-  ensureDir(sessionDirById(currentId!));
-  const lines = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-  fs.writeFileSync(messagesPath(currentId!), lines, "utf-8");
+  const id = requireSessionId();
+  ensureDir(sessionDirById(id));
+  const lines = `${messages.map((m) => JSON.stringify(m)).join("\n")}\n`;
+  fs.writeFileSync(messagesPath(id), lines, "utf-8");
 };
 
 /**
  * 当前 session 是否已有消息文件
  */
-export const sessionExists = (): boolean => fs.existsSync(messagesPath(currentId!));
+export const sessionExists = (): boolean => fs.existsSync(messagesPath(requireSessionId()));

@@ -6,7 +6,7 @@
     "dev": "tsx src/index.ts",
     "dev:continue": "tsx src/index.ts --continue",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node --experimental-specifier-resolution=node dist/index.js",
     "format": "biome format --write src/",
     "lint": "biome lint src/",
     "check": "biome check src/"

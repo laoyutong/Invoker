@@ -4,6 +4,9 @@ import { CONTEXT_COMPRESSION } from "./constants";
 import { model } from "./model";
 import type { TokenTracker } from "./token-tracker";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
 /**
  * 压缩提示词 —— 严格结构化模板
  *
@@ -48,10 +51,7 @@ const formatMessages = (msgs: ModelMessage[]): string => {
   for (const msg of msgs) {
     switch (msg.role) {
       case "user": {
-        const text =
-          typeof msg.content === "string"
-            ? msg.content
-            : JSON.stringify(msg.content);
+        const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
         lines.push(`[用户]: ${text}`);
         break;
       }
@@ -61,10 +61,11 @@ const formatMessages = (msgs: ModelMessage[]): string => {
           lines.push(`[助手]: ${msg.content}`);
         } else if (Array.isArray(msg.content)) {
           const parts: string[] = ["[助手]:"];
-          for (const part of msg.content as any[]) {
-            if (part.type === "text" && part.text) {
+          for (const part of msg.content as unknown[]) {
+            if (!isRecord(part)) continue;
+            if (part.type === "text" && typeof part.text === "string") {
               parts.push(`  ${part.text}`);
-            } else if (part.type === "reasoning" && part.text) {
+            } else if (part.type === "reasoning" && typeof part.text === "string") {
               parts.push(`  [思考: ${part.text.slice(0, 300)}]`);
             } else if (part.type === "tool-call") {
               parts.push(
@@ -79,15 +80,12 @@ const formatMessages = (msgs: ModelMessage[]): string => {
 
       case "tool": {
         if (Array.isArray(msg.content)) {
-          for (const part of msg.content as any[]) {
-            if (part.type === "tool-result") {
-              const output = part.output?.value;
-              const outputStr =
-                typeof output === "string" ? output : JSON.stringify(output);
+          for (const part of msg.content as unknown[]) {
+            if (isRecord(part) && part.type === "tool-result") {
+              const output = isRecord(part.output) ? part.output.value : undefined;
+              const outputStr = typeof output === "string" ? output : JSON.stringify(output);
               const truncated =
-                outputStr.length > 2000
-                  ? outputStr.slice(0, 2000) + "...[截断]"
-                  : outputStr;
+                outputStr.length > 2000 ? `${outputStr.slice(0, 2000)}...[截断]` : outputStr;
               lines.push(`[工具结果 ${part.toolName}]: ${truncated}`);
             }
           }
@@ -112,8 +110,7 @@ export const compressConversation = async (
   messages: ModelMessage[],
   tokenTracker?: TokenTracker,
 ): Promise<void> => {
-  const { messageThreshold, keepRecent, minCompressCount } =
-    CONTEXT_COMPRESSION;
+  const { messageThreshold, keepRecent, minCompressCount } = CONTEXT_COMPRESSION;
 
   if (messages.length <= messageThreshold) return;
 
@@ -134,7 +131,7 @@ export const compressConversation = async (
   );
 
   const formattedMessages = formatMessages(toCompress);
-  const prompt = COMPRESSION_PROMPT + "\n\n" + formattedMessages;
+  const prompt = `${COMPRESSION_PROMPT}\n\n${formattedMessages}`;
 
   try {
     const { text } = await generateText({

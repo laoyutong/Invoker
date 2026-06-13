@@ -1,9 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath, WORKSPACE_ROOT } from "../path-utils";
 import type { ToolDefinition } from "./index";
-
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const findFilesTool = tool({
   description: "在指定目录下搜索匹配模式的文件或子目录，返回匹配项的路径列表",
@@ -44,17 +43,17 @@ export async function executeFindFiles(input: {
   type?: "file" | "directory" | "all";
 }) {
   const searchDir = input.dirPath || ".";
-  const resolved = path.resolve(WORKSPACE_ROOT, searchDir);
+  const resolved = resolveWorkspacePath(searchDir);
 
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许搜索工作目录之外的位置: ${searchDir}` };
+  if (!resolved.ok) {
+    return { error: `不允许搜索工作目录之外的位置: ${resolved.error}` };
   }
 
   try {
-    const entries = await fs.readdir(resolved, { withFileTypes: true });
+    const entries = await fs.readdir(resolved.path, { withFileTypes: true });
     const typeFilter = input.type || "all";
 
-    let results: { name: string; relativePath: string; type: "file" | "directory" }[] = [];
+    const results: { name: string; relativePath: string; type: "file" | "directory" }[] = [];
 
     for (const entry of entries) {
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -67,7 +66,7 @@ export async function executeFindFiles(input: {
 
       results.push({
         name: entry.name,
-        relativePath: path.relative(WORKSPACE_ROOT, path.join(resolved, entry.name)),
+        relativePath: path.relative(WORKSPACE_ROOT, path.join(resolved.path, entry.name)),
         type: entryType,
       });
     }
@@ -109,7 +108,7 @@ export const findFilesConfig = {
     },
     required: [],
   },
-  execute: (input: any) =>
+  execute: (input: unknown) =>
     executeFindFiles(
       input as { dirPath?: string; pattern?: string; type?: "file" | "directory" | "all" },
     ),

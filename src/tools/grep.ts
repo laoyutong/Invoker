@@ -2,9 +2,8 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath, WORKSPACE_ROOT } from "../path-utils";
 import type { ToolDefinition } from "./index";
-
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const grepTool = tool({
   description:
@@ -136,10 +135,10 @@ export async function executeGrep(input: {
   multiline?: boolean;
 }) {
   const searchDir = input.searchPath || ".";
-  const resolved = path.resolve(WORKSPACE_ROOT, searchDir);
+  const resolved = resolveWorkspacePath(searchDir);
 
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许搜索工作目录之外的位置: ${searchDir}` };
+  if (!resolved.ok) {
+    return { error: `不允许搜索工作目录之外的位置: ${resolved.error}` };
   }
 
   let flags = "g";
@@ -176,12 +175,12 @@ export async function executeGrep(input: {
   const results: GrepResult[] = [];
 
   try {
-    const stat = await fs.stat(resolved);
+    const stat = await fs.stat(resolved.path);
 
     if (stat.isFile()) {
-      const relativePath = path.relative(WORKSPACE_ROOT, resolved);
+      const relativePath = path.relative(WORKSPACE_ROOT, resolved.path);
       const result = await searchFile(
-        resolved,
+        resolved.path,
         relativePath,
         regex,
         outputMode,
@@ -191,7 +190,7 @@ export async function executeGrep(input: {
       if (result) results.push(result as GrepResult);
     } else {
       let totalMatches = 0;
-      for await (const { fullPath, relativePath } of walkFiles(resolved, input.include)) {
+      for await (const { fullPath, relativePath } of walkFiles(resolved.path, input.include)) {
         if (totalMatches >= headLimit && outputMode === "files_with_matches") break;
 
         const result = await searchFile(
@@ -339,7 +338,7 @@ export const grepConfig = {
     },
     required: ["pattern"],
   },
-  execute: (input: any) =>
+  execute: (input: unknown) =>
     executeGrep(
       input as {
         pattern: string;

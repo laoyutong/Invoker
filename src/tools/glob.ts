@@ -2,9 +2,8 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath } from "../path-utils";
 import type { ToolDefinition } from "./index";
-
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const globTool = tool({
   description:
@@ -113,13 +112,13 @@ async function walkDir(
 }
 
 export async function executeGlob(input: { pattern: string; basePath?: string }) {
-  const base = path.resolve(WORKSPACE_ROOT, input.basePath || ".");
-  if (!base.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许搜索工作目录之外的位置: ${input.basePath}` };
+  const base = resolveWorkspacePath(input.basePath || ".");
+  if (!base.ok) {
+    return { error: `不允许搜索工作目录之外的位置: ${base.error}` };
   }
 
   try {
-    const allFiles = await walkDir(base, base);
+    const allFiles = await walkDir(base.path, base.path);
     const regex = globToRegex(input.pattern);
 
     const matched = allFiles.filter((f) => regex.test(f.relativePath));
@@ -153,7 +152,7 @@ export const globConfig = {
     },
     required: ["pattern"],
   },
-  execute: (input: any) => executeGlob(input as { pattern: string; basePath?: string }),
+  execute: (input: unknown) => executeGlob(input as { pattern: string; basePath?: string }),
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 5000,

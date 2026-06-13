@@ -1,9 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath } from "../path-utils";
 import type { ToolDefinition } from "./index";
-
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const writeFileTool = tool({
   description: "将内容写入指定文件，如果文件已存在则覆盖",
@@ -24,15 +23,15 @@ export const writeFileTool = tool({
 });
 
 export async function executeWriteFile(input: { filePath: string; content: string }) {
-  const resolved = path.resolve(WORKSPACE_ROOT, input.filePath);
+  const resolved = resolveWorkspacePath(input.filePath);
 
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许写入工作目录之外的文件: ${input.filePath}` };
+  if (!resolved.ok) {
+    return { error: `不允许写入工作目录之外的文件: ${resolved.error}` };
   }
 
   try {
-    await fs.mkdir(path.dirname(resolved), { recursive: true });
-    await fs.writeFile(resolved, input.content, "utf-8");
+    await fs.mkdir(path.dirname(resolved.path), { recursive: true });
+    await fs.writeFile(resolved.path, input.content, "utf-8");
     return {
       path: input.filePath,
       written: input.content.length,
@@ -55,7 +54,7 @@ export const writeFileConfig = {
     },
     required: ["filePath", "content"],
   },
-  execute: (input: any) => executeWriteFile(input as { filePath: string; content: string }),
+  execute: (input: unknown) => executeWriteFile(input as { filePath: string; content: string }),
   isReadOnly: false,
   isConcurrencySafe: false,
   maxResultChars: 200,

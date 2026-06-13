@@ -37,5 +37,4 @@ const builder = new PromptBuilder()
   // ---- 动态 sections ----
   .pipe("deferredTools", deferredTools());
 
-export const buildPrompt = (ctx: PromptContext): string =>
-  builder.build(ctx);
+export const buildPrompt = (ctx: PromptContext): string => builder.build(ctx);

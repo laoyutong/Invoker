@@ -109,7 +109,7 @@ export const fetchUrlConfig = {
     },
     required: ["url"],
   },
-  execute: (input: any) => executeFetchUrl(input as { url: string }),
+  execute: (input: unknown) => executeFetchUrl(input as { url: string }),
   isReadOnly: true,
   isConcurrencySafe: true,
   maxResultChars: 8000,

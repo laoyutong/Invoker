@@ -1,6 +1,6 @@
 import type { LanguageModelUsage } from "ai";
 
-import { type PricingTier, CONTEXT_WINDOW, PRICING, TOKEN_BUDGET } from "./constants";
+import { CONTEXT_WINDOW, PRICING, type PricingTier, TOKEN_BUDGET } from "./constants";
 
 const fmtTokens = (n: number | undefined): string => {
   if (n === undefined) return "?";
@@ -26,13 +26,13 @@ const fmtCost = (usd: number): string => {
 };
 
 const fmtRate = (rate: number): string => {
-  if (!isFinite(rate)) return "N/A";
+  if (!Number.isFinite(rate)) return "N/A";
   return `${rate.toFixed(1)}%`;
 };
 
 /** 绘制可视化进度条（20 格） */
 const drawBar = (rate: number): string => {
-  if (!isFinite(rate)) return "";
+  if (!Number.isFinite(rate)) return "";
   const filled = Math.round(rate / 5); // 0-100 → 0-20
   const empty = 20 - filled;
   return "█".repeat(filled) + "░".repeat(empty);
@@ -51,10 +51,10 @@ export class TokenTracker {
 
   /** 累计统计（用于 /usage 汇报） */
   private stepCount = 0;
-  private totalNoCacheTokens = 0;   // 标准输入（非缓存命中）
+  private totalNoCacheTokens = 0; // 标准输入（非缓存命中）
   private totalCacheWriteTokens = 0; // 缓存写入
-  private totalCacheReadTokens = 0;  // 缓存读取
-  private totalOutputTokens = 0;     // 累计输出
+  private totalCacheReadTokens = 0; // 缓存读取
+  private totalOutputTokens = 0; // 累计输出
 
   /** 静态上下文 token 估算（system prompt + tool defs），用于 /context 展示 */
   private systemTokens = 0;
@@ -218,7 +218,7 @@ export class TokenTracker {
     const empty = barLen - filled;
     const bar = "█".repeat(filled) + "░".repeat(empty);
 
-    const pct = (part: number) => total > 0 ? `${((part / total) * 100).toFixed(0)}%` : "0%";
+    const pct = (part: number) => (total > 0 ? `${((part / total) * 100).toFixed(0)}%` : "0%");
     const labelWidth = 18;
     const pad = (label: string) => label.padEnd(labelWidth);
     const num = (n: number) => fmtTokensCompact(n).padStart(6);
@@ -231,7 +231,9 @@ export class TokenTracker {
     lines.push(`  🔧 ${pad("Tools")} ${num(toolT)} tokens  (${pct(toolT)})`);
     lines.push(`  💬 ${pad("Messages")} ${num(messagesT)} tokens  (${pct(messagesT)})`);
     lines.push(`  ${"─".repeat(labelWidth + 16)}`);
-    lines.push(`  Total            ${num(total)} / ${fmtTokensCompact(maxTokens)} tokens (${fmtRate(pctUsed)})`);
+    lines.push(
+      `  Total            ${num(total)} / ${fmtTokensCompact(maxTokens)} tokens (${fmtRate(pctUsed)})`,
+    );
     lines.push(`  ${bar}  ${fmtRate(pctUsed)} used`);
 
     return lines.join("\n");
@@ -259,8 +261,7 @@ export class TokenTracker {
     // 假设没有缓存：所有输入都按标准价
     const totalInput = noCache + cacheWrite + cacheRead;
     const withoutCacheCost =
-      totalInput * toPerToken(this.pricing.input) +
-      output * toPerToken(this.pricing.output);
+      totalInput * toPerToken(this.pricing.input) + output * toPerToken(this.pricing.output);
 
     const saved = withoutCacheCost - actualCost;
     const savedRate = withoutCacheCost > 0 ? (saved / withoutCacheCost) * 100 : 0;

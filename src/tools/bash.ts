@@ -1,10 +1,9 @@
 import * as childProcess from "node:child_process";
 import * as os from "node:os";
-import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath } from "../path-utils";
 import type { ToolDefinition } from "./index";
 
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 const DEFAULT_TIMEOUT = 120_000; // 2 分钟
 const MAX_TIMEOUT = 600_000; // 10 分钟
 const MAX_BUFFER = 1024 * 1024; // 1MB
@@ -20,7 +19,6 @@ export const bashTool = tool({
     workdir?: string;
     timeout?: number;
     run_in_background?: boolean;
-    dangerouslyDisableSandbox?: boolean;
   }>({
     type: "object",
     properties: {
@@ -44,10 +42,6 @@ export const bashTool = tool({
         type: "boolean",
         description: "设为 true 时在后台运行，立即返回。默认 false",
       },
-      dangerouslyDisableSandbox: {
-        type: "boolean",
-        description: "禁用沙箱安全限制（默认 false）",
-      },
     },
     required: ["command", "description"],
   }),
@@ -69,20 +63,19 @@ export async function executeBash(input: {
   workdir?: string;
   timeout?: number;
   run_in_background?: boolean;
-  dangerouslyDisableSandbox?: boolean;
 }) {
   const env = getEnvironmentInfo();
 
-  const cwd = path.resolve(WORKSPACE_ROOT, input.workdir || ".");
-  if (!cwd.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许在工作目录之外执行命令: ${input.workdir}`, env };
+  const cwd = resolveWorkspacePath(input.workdir || ".");
+  if (!cwd.ok) {
+    return { error: `不允许在工作目录之外执行命令: ${cwd.error}`, env };
   }
 
   const timeout = Math.min(MAX_TIMEOUT, Math.max(1, input.timeout ?? DEFAULT_TIMEOUT));
 
   if (input.run_in_background) {
     const child = childProcess.exec(input.command, {
-      cwd,
+      cwd: cwd.path,
       shell: env.shell || "/bin/sh",
       env: { ...process.env },
       maxBuffer: MAX_BUFFER,
@@ -102,7 +95,7 @@ export async function executeBash(input: {
 
   return new Promise((resolve) => {
     const child = childProcess.exec(input.command, {
-      cwd,
+      cwd: cwd.path,
       shell: env.shell || "/bin/sh",
       env: { ...process.env },
       maxBuffer: MAX_BUFFER,
@@ -162,11 +155,10 @@ export const bashConfig = {
       workdir: { type: "string", description: "工作目录（相对于工作目录），默认为工作目录根" },
       timeout: { type: "number", description: `超时时间（毫秒），默认 ${DEFAULT_TIMEOUT}ms` },
       run_in_background: { type: "boolean", description: "后台运行" },
-      dangerouslyDisableSandbox: { type: "boolean", description: "禁用沙箱" },
     },
     required: ["command", "description"],
   },
-  execute: (input: any) =>
+  execute: (input: unknown) =>
     executeBash(
       input as {
         command: string;
@@ -174,7 +166,6 @@ export const bashConfig = {
         workdir?: string;
         timeout?: number;
         run_in_background?: boolean;
-        dangerouslyDisableSandbox?: boolean;
       },
     ),
   isReadOnly: false,

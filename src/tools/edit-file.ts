@@ -1,9 +1,7 @@
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { jsonSchema, tool } from "ai";
+import { resolveWorkspacePath } from "../path-utils";
 import type { ToolDefinition } from "./index";
-
-const WORKSPACE_ROOT = path.resolve(process.cwd());
 
 export const editFileTool = tool({
   description:
@@ -44,15 +42,15 @@ export async function executeEditFile(input: {
   new_string: string;
   replace_all?: boolean;
 }) {
-  const resolved = path.resolve(WORKSPACE_ROOT, input.filePath);
+  const resolved = resolveWorkspacePath(input.filePath);
 
-  if (!resolved.startsWith(WORKSPACE_ROOT)) {
-    return { error: `不允许编辑工作目录之外的文件: ${input.filePath}` };
+  if (!resolved.ok) {
+    return { error: `不允许编辑工作目录之外的文件: ${resolved.error}` };
   }
 
   let content: string;
   try {
-    content = await fs.readFile(resolved, "utf-8");
+    content = await fs.readFile(resolved.path, "utf-8");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -75,7 +73,7 @@ export async function executeEditFile(input: {
       return { error: `未找到匹配的文本: "${input.old_string.slice(0, 80)}"` };
     }
     const newContent = content.replaceAll(input.old_string, input.new_string);
-    await fs.writeFile(resolved, newContent, "utf-8");
+    await fs.writeFile(resolved.path, newContent, "utf-8");
     return {
       path: input.filePath,
       replacements: count,
@@ -107,7 +105,7 @@ export async function executeEditFile(input: {
     content.slice(0, occurrences[0]) +
     input.new_string +
     content.slice(occurrences[0] + input.old_string.length);
-  await fs.writeFile(resolved, newContent, "utf-8");
+  await fs.writeFile(resolved.path, newContent, "utf-8");
   return {
     path: input.filePath,
     replacements: 1,
@@ -130,7 +128,7 @@ export const editFileConfig = {
     },
     required: ["filePath", "old_string", "new_string"],
   },
-  execute: (input: any) =>
+  execute: (input: unknown) =>
     executeEditFile(
       input as { filePath: string; old_string: string; new_string: string; replace_all?: boolean },
     ),
