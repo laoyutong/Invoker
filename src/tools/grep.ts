@@ -186,6 +186,7 @@ export async function executeGrep(input: {
         outputMode,
         contextBefore,
         contextAfter,
+        input.multiline ?? false,
       );
       if (result) results.push(result as GrepResult);
     } else {
@@ -200,6 +201,7 @@ export async function executeGrep(input: {
           outputMode,
           contextBefore,
           contextAfter,
+          input.multiline ?? false,
         );
         if (result) {
           results.push(result as GrepResult);
@@ -240,6 +242,7 @@ async function searchFile(
   outputMode: "content" | "files_with_matches" | "count",
   contextBefore: number,
   contextAfter: number,
+  multiline: boolean,
 ): Promise<{
   file: string;
   type: "content" | "files_with_matches" | "count";
@@ -258,6 +261,34 @@ async function searchFile(
   const content = buffer.toString("utf-8");
   const lines = content.split("\n");
 
+  if (multiline) {
+    const matches: { line: number; text: string }[] = [];
+    const fullTextRegex = new RegExp(
+      regex.source,
+      regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+    );
+    let match = fullTextRegex.exec(content);
+    while (match !== null) {
+      const line = content.slice(0, match.index).split("\n").length;
+      matches.push({ line, text: match[0] });
+
+      if (match[0].length === 0) {
+        fullTextRegex.lastIndex++;
+      }
+
+      match = fullTextRegex.exec(content);
+    }
+
+    return formatSearchResult(
+      relativePath,
+      outputMode,
+      lines,
+      matches,
+      contextBefore,
+      contextAfter,
+    );
+  }
+
   const flags = regex.flags.includes("s")
     ? `g${regex.flags.replace("s", "").replace("g", "")}`
     : regex.flags.replace("g", "");
@@ -271,6 +302,22 @@ async function searchFile(
     }
   }
 
+  return formatSearchResult(relativePath, outputMode, lines, matches, contextBefore, contextAfter);
+}
+
+function formatSearchResult(
+  relativePath: string,
+  outputMode: "content" | "files_with_matches" | "count",
+  lines: string[],
+  matches: { line: number; text: string }[],
+  contextBefore: number,
+  contextAfter: number,
+): {
+  file: string;
+  type: "content" | "files_with_matches" | "count";
+  matches?: { line: number; text: string; contextBefore?: string[]; contextAfter?: string[] }[];
+  matchCount?: number;
+} | null {
   if (matches.length === 0) return null;
 
   if (outputMode === "count") {

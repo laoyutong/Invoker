@@ -1,7 +1,7 @@
 import type { ModelMessage } from "ai";
 
 import { CONTEXT_CLEANUP, CONTEXT_WINDOW, TOOL_RESULT_BUDGET, TOOL_RESULT_TTL } from "./constants";
-import { isToolCallPart, isToolResultPart } from "./message-parts";
+import { isToolResultPart } from "./message-parts";
 import { toolRegistry } from "./tools";
 
 const ERROR_KEYWORDS = [
@@ -105,15 +105,6 @@ const pruneExpiredToolResults = (
   }
 
   if (hardClearedIds.size > 0) {
-    for (const msg of messages) {
-      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-      msg.content = msg.content.filter((part: unknown) => {
-        if (isToolCallPart(part) && typeof part.toolCallId === "string") {
-          return !hardClearedIds.has(part.toolCallId);
-        }
-        return true;
-      });
-    }
     console.log(`\n⏰ TTL 硬清除: ${hardClearedIds.size} 条工具结果已过期`);
   }
 };
@@ -186,16 +177,6 @@ const enforceToolResultBudget = (messages: ModelMessage[]): Set<string> => {
     excess -= chars;
   }
 
-  for (const msg of messages) {
-    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-    msg.content = msg.content.filter((part: unknown) => {
-      if (isToolCallPart(part) && typeof part.toolCallId === "string") {
-        return !clearedIds.has(part.toolCallId);
-      }
-      return true;
-    });
-  }
-
   console.log(`   ✅ 已清理 ${clearedIds.size} 条工具结果`);
   return clearedIds;
 };
@@ -244,15 +225,8 @@ const cleanOldReadOnlyToolResults = (messages: ModelMessage[]): void => {
     }) as typeof msg.content;
   }
 
-  for (const msg of messages) {
-    if (msg.role !== "assistant") continue;
-    if (!Array.isArray(msg.content)) continue;
-    msg.content = msg.content.filter((part: unknown) => {
-      if (isToolCallPart(part) && typeof part.toolCallId === "string") {
-        return !clearedIds.has(part.toolCallId);
-      }
-      return true;
-    });
+  if (clearedIds.size > 0) {
+    console.log(`\n🧹 已清理 ${clearedIds.size} 条旧只读工具结果`);
   }
 };
 

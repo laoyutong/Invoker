@@ -64,7 +64,7 @@
 
 - 所有工具结果总字符数不超过窗口 75%
 - 超限从最老的 tool result 开始替换为 `[tool result truncated]`
-- 同步移除 assistant 消息中对应的 tool-call part
+- 保留 assistant 消息中对应的 tool-call part，避免破坏 tool-call/tool-result 配对
 
 #### 第三级：TTL 时间修剪
 
@@ -72,17 +72,18 @@
 |------|------|------|----------|
 | 原始 | 0-5 min | 完整结果 | 正常内容 |
 | 软修剪 | 5-10 min | 保留头尾各 1500 字符 | `头...[soft pruned: N chars]...尾` |
-| 硬清除 | >10 min | 完全替换 + 移除 tool-call | `[tool result expired: tool_name]` |
+| 硬清除 | >10 min | 完全替换 tool result 内容 | `[tool result expired: tool_name]` |
 
 - 仅对只读工具生效（`isReadOnly: true`）
 - 含 error / fail / not found 等错误关键词的结果**自动跳过**，保留完整错误信息
 - 已软修剪过的结果不会重复修剪
+- 硬清除只替换 tool result 内容，保留对应 tool-call 以维持消息配对合法性
 
 #### 第四级：查询类结果清理
 
 - 只读工具结果超过 10 个时触发
 - 保留最近 3 个，其余替换为 `[tool result cleared]`
-- 同步移除 assistant 消息中对应的 tool-call
+- 保留 assistant 消息中对应的 tool-call，避免产生孤儿 tool result
 
 #### 最终防线：LLM 结构化压缩
 

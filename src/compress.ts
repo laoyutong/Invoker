@@ -98,6 +98,10 @@ const formatMessages = (msgs: ModelMessage[]): string => {
   return lines.join("\n\n");
 };
 
+const estimateMessageChars = (msg: ModelMessage): number => {
+  return typeof msg.content === "string" ? msg.content.length : JSON.stringify(msg.content).length;
+};
+
 /**
  * 压缩早期对话，用 LLM 生成结构化摘要替换旧消息。
  *
@@ -125,6 +129,7 @@ export const compressConversation = async (
   if (compressCount < minCompressCount) return;
 
   const toCompress = messages.slice(0, compressCount);
+  const oldChars = toCompress.reduce((sum, msg) => sum + estimateMessageChars(msg), 0);
 
   console.log(
     `\n📦 上下文过长（${messages.length} 条），调用 LLM 压缩早期 ${toCompress.length} 条消息...`,
@@ -152,8 +157,8 @@ export const compressConversation = async (
       content: summary,
     } as ModelMessage);
 
-    // 替换后 net 变化用 chars/4 粗估（下次 API 调用会校准）
-    tokenTracker?.addEstimate(summary.length);
+    // 替换后用净变化粗估 token（下次 API 调用会重新校准）。
+    tokenTracker?.addEstimate(summary.length - oldChars);
 
     console.log(
       `✅ 压缩完成：${toCompress.length} 条早期消息 → 1 条摘要（当前共 ${messages.length} 条消息）`,

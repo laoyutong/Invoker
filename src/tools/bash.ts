@@ -57,6 +57,18 @@ function getEnvironmentInfo() {
   };
 }
 
+function buildCommandEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  const secretPattern = /(api[_-]?key|token|secret|password|credential|auth)/i;
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (secretPattern.test(key)) continue;
+    env[key] = value;
+  }
+
+  return env;
+}
+
 export async function executeBash(input: {
   command: string;
   description: string;
@@ -72,21 +84,35 @@ export async function executeBash(input: {
   }
 
   const timeout = Math.min(MAX_TIMEOUT, Math.max(1, input.timeout ?? DEFAULT_TIMEOUT));
+  const commandEnv = buildCommandEnv();
 
   if (input.run_in_background) {
-    const child = childProcess.exec(input.command, {
+    const child = childProcess.spawn(env.shell || "/bin/sh", ["-lc", input.command], {
       cwd: cwd.path,
-      shell: env.shell || "/bin/sh",
-      env: { ...process.env },
-      maxBuffer: MAX_BUFFER,
+      detached: true,
+      env: commandEnv,
+      stdio: "ignore",
     });
 
+    const killTimer = setTimeout(() => {
+      if (!child.pid) return;
+      try {
+        process.kill(os.platform() === "win32" ? child.pid : -child.pid, "SIGTERM");
+      } catch {
+        // 进程可能已退出，忽略清理错误。
+      }
+    }, timeout);
+    killTimer.unref();
+
     child.on("error", () => {}); // 忽略错误，后台进程
+    child.on("close", () => clearTimeout(killTimer));
+    child.unref();
 
     return {
       status: "started",
       pid: child.pid,
       description: input.description,
+      timeout,
       env,
     };
   }
@@ -97,7 +123,7 @@ export async function executeBash(input: {
     const child = childProcess.exec(input.command, {
       cwd: cwd.path,
       shell: env.shell || "/bin/sh",
-      env: { ...process.env },
+      env: commandEnv,
       maxBuffer: MAX_BUFFER,
       timeout,
     });

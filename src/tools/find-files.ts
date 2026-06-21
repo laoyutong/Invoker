@@ -37,6 +37,39 @@ function matchPattern(name: string, pattern: string): boolean {
   return regex.test(name);
 }
 
+async function walkEntries(
+  dir: string,
+  typeFilter: "file" | "directory" | "all",
+  pattern?: string,
+): Promise<{ name: string; relativePath: string; type: "file" | "directory" }[]> {
+  const results: { name: string; relativePath: string; type: "file" | "directory" }[] = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+
+    const fullPath = path.join(dir, entry.name);
+    const entryType = entry.isDirectory() ? "directory" : "file";
+
+    if (
+      (typeFilter === "all" || entryType === typeFilter) &&
+      (!pattern || matchPattern(entry.name, pattern))
+    ) {
+      results.push({
+        name: entry.name,
+        relativePath: path.relative(WORKSPACE_ROOT, fullPath),
+        type: entryType,
+      });
+    }
+
+    if (entry.isDirectory()) {
+      results.push(...(await walkEntries(fullPath, typeFilter, pattern)));
+    }
+  }
+
+  return results;
+}
+
 export async function executeFindFiles(input: {
   dirPath?: string;
   pattern?: string;
@@ -50,26 +83,8 @@ export async function executeFindFiles(input: {
   }
 
   try {
-    const entries = await fs.readdir(resolved.path, { withFileTypes: true });
     const typeFilter = input.type || "all";
-
-    const results: { name: string; relativePath: string; type: "file" | "directory" }[] = [];
-
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const entryType = entry.isDirectory() ? "directory" : "file";
-
-      if (typeFilter !== "all" && entryType !== typeFilter) continue;
-
-      if (input.pattern && !matchPattern(entry.name, input.pattern)) continue;
-
-      results.push({
-        name: entry.name,
-        relativePath: path.relative(WORKSPACE_ROOT, path.join(resolved.path, entry.name)),
-        type: entryType,
-      });
-    }
+    const results = await walkEntries(resolved.path, typeFilter, input.pattern);
 
     return {
       dir: searchDir,

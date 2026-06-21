@@ -141,6 +141,7 @@ const main = async () => {
 
     if (!input.trim()) continue;
 
+    const turnStartIndex = messages.length;
     pushMessage({ role: "user", content: input });
 
     activateDeferredTools(input);
@@ -292,8 +293,8 @@ const main = async () => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`\n❌ ${message}`);
-      // 撤回本轮对话中已推送的用户消息，避免污染上下文
-      messages.pop();
+      // 撤回本轮已推送的所有消息，避免留下半截 tool-call/tool-result 配对。
+      messages.splice(turnStartIndex);
     }
   }
 

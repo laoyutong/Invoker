@@ -6,6 +6,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { McpServerConfig } from "./config";
 import { isStdioConfig } from "./config";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
 export class MCPClientManager {
   private client: Client;
   private serverName: string;
@@ -58,20 +61,37 @@ export class MCPClientManager {
     }));
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (!this.connected) {
       throw new Error(`MCP server "${this.serverName}" not connected`);
     }
     const result = await this.client.callTool({ name, arguments: args });
-    const content = result.content as { type: string; text?: string }[];
+    const content = Array.isArray(result.content) ? result.content : [];
     const textParts = content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .filter((c): c is { type: "text"; text: string } => isRecord(c) && c.type === "text")
       .map((c) => c.text)
       .filter((t): t is string => t !== undefined);
+    const text = textParts.join("\n");
+    const structuredContent = isRecord(result) ? result.structuredContent : undefined;
+
     if (result.isError) {
-      return `[MCP Error] ${textParts.join("\n")}`;
+      return {
+        error: "MCP tool returned error",
+        text,
+        content,
+        structuredContent,
+      };
     }
-    return textParts.join("\n");
+
+    if (content.length === textParts.length && structuredContent === undefined) {
+      return text;
+    }
+
+    return {
+      text,
+      content,
+      structuredContent,
+    };
   }
 
   async close(): Promise<void> {

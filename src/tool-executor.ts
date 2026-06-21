@@ -67,33 +67,54 @@ const pushToolResult = (pushMessage: PushMessage, tc: ToolCallEntry, result: unk
   } as ModelMessage);
 };
 
+const executeGroup = async (group: ToolExecution[], pushMessage: PushMessage): Promise<void> => {
+  if (group.length === 0) return;
+
+  if (group.length === 1 && !group[0].entry.isConcurrencySafe) {
+    const { tc, entry } = group[0];
+    const { result, rawResult } = await executeOne(tc, entry);
+    logToolResult(tc.toolName, rawResult, entry.maxResultChars);
+    pushToolResult(pushMessage, tc, result);
+    return;
+  }
+
+  const results = await Promise.all(group.map((e) => executeOne(e.tc, e.entry)));
+  for (const { tc, rawResult, entry } of results) {
+    logToolResult(tc.toolName, rawResult, entry.maxResultChars);
+  }
+  for (const { tc, result } of results) {
+    pushToolResult(pushMessage, tc, result);
+  }
+};
+
 export const executeToolCalls = async (
   toolCalls: ToolCallEntry[],
   pushMessage: PushMessage,
 ): Promise<void> => {
-  const entries: ToolExecution[] = [];
+  let entries: ToolExecution[] = [];
+
+  const flush = async (): Promise<void> => {
+    const groups = groupToolCalls(entries);
+    entries = [];
+    for (const group of groups) {
+      await executeGroup(group, pushMessage);
+    }
+  };
+
   for (const tc of toolCalls) {
     const entry = toolRegistry.lookup(tc.toolName);
-    if (entry) entries.push({ tc, entry });
-  }
-
-  const groups = groupToolCalls(entries);
-
-  for (const group of groups) {
-    if (group.length === 1 && !group[0].entry.isConcurrencySafe) {
-      const { tc, entry } = group[0];
-      const { result, rawResult } = await executeOne(tc, entry);
-      logToolResult(tc.toolName, rawResult, entry.maxResultChars);
+    if (!entry) {
+      await flush();
+      const result = {
+        error: `未知工具: ${tc.toolName}`,
+        availableTools: toolRegistry.activeNames(),
+      };
+      logToolResult(tc.toolName, result, 1000);
       pushToolResult(pushMessage, tc, result);
       continue;
     }
-
-    const results = await Promise.all(group.map((e) => executeOne(e.tc, e.entry)));
-    for (const { tc, rawResult, entry } of results) {
-      logToolResult(tc.toolName, rawResult, entry.maxResultChars);
-    }
-    for (const { tc, result } of results) {
-      pushToolResult(pushMessage, tc, result);
-    }
+    entries.push({ tc, entry });
   }
+
+  await flush();
 };
