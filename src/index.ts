@@ -7,6 +7,13 @@ import { MAX_TOOL_LOOPS } from "./constants";
 import { cleanupToolResults } from "./context-manager";
 import { CycleDetector } from "./cycle-detector";
 import { activateDeferredTools, promptRuntimeContext } from "./deferred-tools";
+import {
+  clearMemory,
+  forgetMemory,
+  loadMemory,
+  renderMemory,
+  updateLongTermMemory,
+} from "./memory";
 import { initMCP } from "./mcp";
 import { type AssistantContentPart, isToolResultPart, type ToolCallEntry } from "./message-parts";
 import { MODEL_NAME, model } from "./model";
@@ -61,6 +68,7 @@ let messages: ModelMessage[] = [];
 /** 工具结果的时间戳记录，用于 TTL 修剪（toolCallId → 创建时间） */
 const toolResultTimestamps = new Map<string, number>();
 const cycleDetector = new CycleDetector();
+let memoryEnabled = true;
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -92,7 +100,7 @@ const initOrRestoreSession = (): void => {
 
 /** 组装当前运行时上下文并构建 system prompt */
 const buildSystemPrompt = (): string => {
-  return buildPrompt(promptRuntimeContext(messages.length));
+  return buildPrompt(promptRuntimeContext(messages.length, { includeMemory: memoryEnabled }));
 };
 
 const main = async () => {
@@ -101,7 +109,12 @@ const main = async () => {
   initSession({ continueSession: shouldContinue, targetId: targetSessionId });
   initOrRestoreSession();
 
-  console.log('输入对话内容，"exit" 退出，"/usage" 用量，"/context" 上下文\n');
+  const memoryCount = loadMemory().items.length;
+  if (memoryCount > 0) {
+    console.log(`🧠 已加载 ${memoryCount} 条跨会话记忆`);
+  }
+
+  console.log('输入对话内容，"exit" 退出，"/usage" 用量，"/context" 上下文，"/memory" 记忆\n');
 
   const tokenTracker = new TokenTracker(MODEL_NAME);
 
@@ -125,6 +138,9 @@ const main = async () => {
     const input = await ask();
 
     if (input.toLowerCase() === "exit") {
+      if (memoryEnabled) {
+        await updateLongTermMemory(messages, { sessionId: getSessionId(), force: true });
+      }
       console.log(`再见！Session: ${getSessionId()}`);
       break;
     }
@@ -136,6 +152,52 @@ const main = async () => {
 
     if (input.trim() === "/context") {
       console.log(tokenTracker.context());
+      continue;
+    }
+
+    if (input.trim().startsWith("/memory")) {
+      const [, command, arg] = input.trim().split(/\s+/, 3);
+
+      if (!command) {
+        console.log(renderMemory());
+        continue;
+      }
+
+      if (command === "off") {
+        memoryEnabled = false;
+        console.log("🧠 本次运行已关闭跨会话记忆注入与写入");
+        continue;
+      }
+
+      if (command === "on") {
+        memoryEnabled = true;
+        console.log("🧠 本次运行已开启跨会话记忆注入与写入");
+        continue;
+      }
+
+      if (command === "clear") {
+        clearMemory();
+        console.log("🧠 已清空跨会话记忆");
+        continue;
+      }
+
+      if (command === "forget") {
+        if (!arg) {
+          console.log("用法：/memory forget <id>");
+          continue;
+        }
+        console.log(forgetMemory(arg) ? `🧠 已删除记忆 ${arg}` : `⚠️ 未找到记忆 ${arg}`);
+        continue;
+      }
+
+      if (command === "extract") {
+        await updateLongTermMemory(messages, { sessionId: getSessionId(), force: true });
+        continue;
+      }
+
+      console.log(
+        "用法：/memory | /memory on | /memory off | /memory extract | /memory forget <id> | /memory clear",
+      );
       continue;
     }
 
@@ -288,6 +350,10 @@ const main = async () => {
 
       // 工具结果清理后若上下文仍过长，调用 LLM 压缩早期对话
       await compressConversation(messages, tokenTracker);
+
+      if (memoryEnabled) {
+        await updateLongTermMemory(messages, { sessionId: getSessionId() });
+      }
 
       saveSession(messages);
     } catch (err) {

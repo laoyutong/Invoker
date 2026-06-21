@@ -2,6 +2,7 @@
 export interface PromptContext {
   toolCount: number;
   deferredToolSummary: string;
+  longTermMemory: string;
   sessionMessageCount: number;
   sessionId: string;
 }

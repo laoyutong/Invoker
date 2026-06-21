@@ -25,6 +25,7 @@ export class PromptBuilder {
 import { codingConventions } from "./modules/coding-conventions";
 import { coreRules } from "./modules/core";
 import { deferredTools } from "./modules/deferred-tools";
+import { memory } from "./modules/memory";
 import { safetyRules } from "./modules/safety-rules";
 import { toolGuide } from "./modules/tool-guide";
 
@@ -35,6 +36,7 @@ const builder = new PromptBuilder()
   .pipe("toolGuide", toolGuide())
   .pipe("codingConventions", codingConventions())
   // ---- 动态 sections ----
+  .pipe("memory", memory())
   .pipe("deferredTools", deferredTools());
 
 export const buildPrompt = (ctx: PromptContext): string => builder.build(ctx);

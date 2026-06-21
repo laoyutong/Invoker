@@ -1,3 +1,4 @@
+import { formatMemoryForPrompt } from "./memory";
 import { getSessionId } from "./session";
 import { toolRegistry } from "./tools";
 import { activateByKeywords } from "./tools/search";
@@ -91,9 +92,13 @@ export const buildDeferredToolSummary = (): string => {
     .join("\n");
 };
 
-export const promptRuntimeContext = (messageCount: number) => ({
+export const promptRuntimeContext = (
+  messageCount: number,
+  opts?: { includeMemory?: boolean },
+) => ({
   toolCount: toolRegistry.activeNames().length,
   deferredToolSummary: buildDeferredToolSummary(),
+  longTermMemory: opts?.includeMemory === false ? "" : formatMemoryForPrompt(),
   sessionMessageCount: messageCount,
   sessionId: getSessionId(),
 });
